@@ -243,7 +243,7 @@ submit_info :: proc(
 
 allocation_info :: proc(
     usage: vma.Memory_Usage,
-    memory_flags: vk.MemoryPropertyFlags,
+    memory_flags: vk.MemoryPropertyFlags = {},
     flags: vma.Allocation_Create_Flags = {},
 ) -> vma.Allocation_Create_Info {
     return {

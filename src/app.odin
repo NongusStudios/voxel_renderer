@@ -12,6 +12,8 @@ App :: struct {
     window:   ^sdl.Window,
     running:   bool,
     minimized: bool,
+
+    voxel_state: Voxel_State,
 }
 
 @(private="file")
@@ -24,6 +26,25 @@ get_window_extent :: proc() -> vk.Extent2D {
     return vk.Extent2D {
         width  = u32(w),
         height = u32(h),
+    }
+}
+
+get_largest_display_bounds :: proc() -> vk.Extent2D {
+    display_count: i32
+    displays := sdl.GetDisplays(&display_count)
+    
+    largest_w: i32 = 0
+    largest_h: i32 = 0
+    rect: sdl.Rect
+    for i: i32 = 0; i < display_count; i += 1 {
+        sdl.GetDisplayBounds(displays[i], &rect)
+        if rect.w > largest_w { largest_w = rect.w }
+        if rect.h > largest_h { largest_h = rect.h }
+    }
+
+    return vk.Extent2D {
+        width  = u32(largest_w),
+        height = u32(largest_h),
     }
 }
 
@@ -43,13 +64,16 @@ init_app :: proc() -> (ok: bool) {
     }
     
     init_vulkan() or_return
-    //init_imgui()  or_return
+    init_imgui()  or_return
+
+    self.voxel_state = create_voxel_state() or_return
 
     self.running = true
     return true
 }
 
 destroy_app :: proc() {
+    destroy_voxel_state(&self.voxel_state)
     cleanup_vulkan()
 
     sdl.DestroyWindow(self.window)
@@ -68,6 +92,8 @@ app_handle_event :: proc(event: sdl.Event) {
     case .WINDOW_MINIMIZED: self.minimized = true
     case .WINDOW_RESIZED:   app_handle_resize()
     }
+
+    voxel_state_input(&self.voxel_state, event)
 }
 
 app_wait_if_minimized :: proc() {
@@ -89,14 +115,8 @@ app_run :: proc() {
         for sdl.PollEvent(&event) {
             //imgui_process_event(&event)
             app_handle_event(event)
-        }
+        } 
 
-        if frame, ok := start_frame(); ok {
-            cmd := frame.command_buffer
-
-            present_frame(frame,
-                {.ALL_COMMANDS}, {},
-                .UNDEFINED)
-        }
+        voxel_state_draw(&self.voxel_state)
     }
 }
