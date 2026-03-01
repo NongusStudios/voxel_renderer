@@ -16,11 +16,20 @@ import im_vk  "../lib/imgui/imgui_impl_vulkan"
 PRESENT_MODE  :: vk.PresentModeKHR.FIFO_RELAXED
 FRAME_OVERLAP :: 2
 
+// Vulkan features
+DEVICE_FEATURES :: vk.PhysicalDeviceFeatures {
+    fillModeNonSolid = true,
+}
+
 // Vulkan 1.1 features
-DEVICE_FEATURES_11 :: vk.PhysicalDeviceVulkan11Features {}
+DEVICE_FEATURES_11 :: vk.PhysicalDeviceVulkan11Features {
+    sType = .PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
+    shaderDrawParameters = true,
+}
 
 // Vulkan 1.2 features
 DEVICE_FEATURES_12 :: vk.PhysicalDeviceVulkan12Features {
+    sType = .PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
     // Allows shaders to directly access buffer memory using GPU addresses
     bufferDeviceAddress = true,
     // Enables dynamic indexing of descriptors and more flexible descriptor usage
@@ -29,14 +38,22 @@ DEVICE_FEATURES_12 :: vk.PhysicalDeviceVulkan12Features {
 
 // Vulkan 1.3 features
 DEVICE_FEATURES_13 :: vk.PhysicalDeviceVulkan13Features {
+    sType = .PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
     // Eliminates the need for render pass objects, simplifying rendering setup
     dynamicRendering = true,
     // Provides improved synchronization primitives with simpler usage patterns
     synchronization2 = true,
 }
 
+DEVICE_FEATURES_EXTENDED_STATE_3 :: vk.PhysicalDeviceExtendedDynamicState3FeaturesEXT {
+    sType = .PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT,
+    extendedDynamicState3PolygonMode = true,
+}
+
 // Enabled extensions
-DEVICE_EXTENSIONS :: []string{}
+DEVICE_EXTENSIONS :: []string{
+    "VK_EXT_extended_dynamic_state3",
+}
 
 Swapchain :: struct {
     swapchain:          vk.SwapchainKHR,
@@ -329,9 +346,10 @@ init_vulkan :: proc(imgui_init := true) -> (ok: bool) {
     // Fetch physical device 
     selector := vkb.create_physical_device_selector(self.vkb.instance)
     if selector == nil { return false }
-    defer vkb.destroy_physical_device_selector(selector)
+    defer vkb.destroy_physical_device_selector(selector) 
 
     vkb.physical_device_selector_set_minimum_version(selector, vk.API_VERSION_1_3)
+    vkb.physical_device_selector_set_required_features(selector, DEVICE_FEATURES)
     vkb.physical_device_selector_set_required_features_11(selector, DEVICE_FEATURES_11)
     vkb.physical_device_selector_set_required_features_12(selector, DEVICE_FEATURES_12)
     vkb.physical_device_selector_set_required_features_13(selector, DEVICE_FEATURES_13)
@@ -350,7 +368,12 @@ init_vulkan :: proc(imgui_init := true) -> (ok: bool) {
     
     // Create logical device
     device_builder := vkb.create_device_builder(self.vkb.physical_device)
+    
+    extended_state3 := DEVICE_FEATURES_EXTENDED_STATE_3
+    vkb.device_builder_add_pnext(device_builder, &extended_state3)
+
     if device_builder == nil { return false }
+
     defer vkb.destroy_device_builder(device_builder)
 
     self.vkb.device, err = vkb.device_builder_build(device_builder)

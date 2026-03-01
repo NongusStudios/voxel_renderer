@@ -1,37 +1,20 @@
 package main
 
 import la  "core:math/linalg"
+
 import sdl "vendor:sdl3"
 import vk  "vendor:vulkan"
+import im "../lib/imgui"
 
-// Size of a chunk on any given axis
-CHUNK_AXIS_SIZE :: 32
-
-// Total amount of voxels per chunk
-CHUNK_FLAT_SIZE :: CHUNK_AXIS_SIZE * CHUNK_AXIS_SIZE * CHUNK_AXIS_SIZE
-
-Voxel :: bool
-Chunk :: struct {
-    data: [CHUNK_FLAT_SIZE]Voxel,
-}
-
-chunk_at :: proc(self: ^Chunk, x, y, z: int) -> ^Voxel {
-    assert(x < 0 || x >= CHUNK_AXIS_SIZE, "Chunk access out of bounds")
-    assert(y < 0 || y >= CHUNK_AXIS_SIZE, "Chunk access out of bounds")
-    assert(z < 0 || z >= CHUNK_AXIS_SIZE, "Chunk access out of bounds")
-    return &self.data[x + \
-                      y * CHUNK_AXIS_SIZE + \
-                      z * CHUNK_AXIS_SIZE * CHUNK_AXIS_SIZE]
-}
-
-Render_Method :: enum {
+Render_Method :: enum i32 {
     Instanced,
     Mesher,
+    Mesher_Gpu,
     Ray_Traversal,
 }
 
 Voxel_State :: struct {
-    chunk: ^Chunk,
+    chunk: Chunk,
 
     method: Render_Method,
 
@@ -39,9 +22,40 @@ Voxel_State :: struct {
     color_attachment: Image,
     depth_attachment: Image,
     viewport_extent:  vk.Extent2D,
+    
+    instanced: struct {
+        vertex_buffer: Buffer,
+        index_buffer:  Buffer,
+        voxel_buffer: Buffer,
+        voxel_buffer_address: vk.DeviceAddress,
+        pipeline: Pipeline,
+    },
+    
+    mesher: struct {
+        vertex_buffer:  Buffer,
+        index_buffer:   Buffer,
+        staging_buffer: Buffer,
+        vertex_buffer_address: vk.DeviceAddress,
 
-    // Buffers
+        pipeline: Pipeline,
+        
+        vertex_data: [dynamic]Vertex,
+        index_data:  [dynamic]u32,
+        
+        update_queued: bool,
+    },
 
+    camera:      Camera, 
+
+    matrices: struct {
+        projection: float4x4,
+        view:       float4x4,
+        model:      float4x4,
+    },
+
+    options: struct {
+        wireframe: bool,
+    }
 }
 
 voxel_state_init_viewport :: proc(self: ^Voxel_State) -> (ok: bool) { 
@@ -78,13 +92,29 @@ voxel_state_init_viewport :: proc(self: ^Voxel_State) -> (ok: bool) {
     return true
 }
 
+voxel_state_init_voxels :: proc(self: ^Voxel_State) {
+    self.chunk = create_chunk()
+    
+    chunk_add_cube(&self.chunk, 0, 0, 0, CHUNK_SIZE, 1, CHUNK_SIZE)
+    chunk_add_sphere(&self.chunk, CHUNK_SIZE/2, CHUNK_SIZE/2, CHUNK_SIZE/2, 12)
+
+    instanced_sync_voxel_data(self)
+    mesher_build_mesh(self)
+}
+
 create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
-    self.method = .Instanced
+    self.method = .Mesher
 
-    voxel_state_init_viewport(&self)
+    voxel_state_init_viewport(&self) or_return
 
+    instanced_init(&self) or_return
+    mesher_init(&self) or_return
+
+    onetime_tracker := create_resource_tracker(); defer destroy_resource_tracker(&onetime_tracker)
     cmd := start_one_time_commands() or_return
-        // Initial image layouts
+        instanced_upload_data(&self, cmd, &onetime_tracker) or_return
+
+        // Initial depth attachment layout
         barrier: Pipeline_Barrier
         pipeline_barrier_add_image_barrier(&barrier,
             {.ALL_COMMANDS}, {},
@@ -97,16 +127,40 @@ create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
         cmd_pipeline_barrier(cmd, &barrier)
     submit_one_time_commands(&cmd)
 
+    // Setup projection, view and model matrices
+    self.matrices.projection = get_projection_matrix()
+
+    self.camera.position = float3{0.0, 0.0, 20.0}
+    self.matrices.view = camera_view_matrix(&self.camera)
+ 
+    self.matrices.model = la.matrix4_scale(float3{0.5, 0.5, 0.5})
+    self.matrices.model *= la.matrix4_translate(float3{
+        -f32(CHUNK_SIZE) / 2.0,
+        -f32(CHUNK_SIZE) / 2.0,
+        -f32(CHUNK_SIZE) / 2.0,
+    })
+
+    voxel_state_init_voxels(&self)
+
     return self, true
 }
 
 destroy_voxel_state :: proc(self: ^Voxel_State) {
-    // Free allocated memory
+    vk.DeviceWaitIdle(get_device())
+    mesher_destroy(self)
+    destroy_chunk(&self.chunk)
 }
 
-voxel_state_input :: proc(self: ^Voxel_State, event: sdl.Event) {
+get_projection_matrix :: proc(fov: f32 = 80.0) -> float4x4 {
+    extent := get_window_extent()
+    aspect := f32(extent.width) / f32(extent.height)
+
+    return matrix4_perspective_reverse_z_f32(la.to_radians(fov), aspect, 0.1)
+}
+
+voxel_state_event :: proc(self: ^Voxel_State, event: sdl.Event) {
     #partial switch event.type {
-    case .WINDOW_RESIZED: {
+    case .WINDOW_RESIZED:
         self.viewport_extent = get_window_extent()
         self.viewport_extent.width = min(
             self.viewport_extent.width,
@@ -116,20 +170,49 @@ voxel_state_input :: proc(self: ^Voxel_State, event: sdl.Event) {
             self.viewport_extent.height,
             self.color_attachment.extent.height,
         )
+
+        self.matrices.projection = get_projection_matrix()
     }
-    }
+
+    camera_input(&self.camera, event)
+}
+
+voxel_state_update :: proc(self: ^Voxel_State, dt: f32) {
+    camera_update(&self.camera, dt)
+}
+
+voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
+    imgui_new_frame()
+    
+    if im.begin("Debug", nil, {.Always_Auto_Resize}) {
+        items := []cstring {
+            "Instanced",
+            "Mesher",
+        }
+        im.combo_char("Rendering Method", transmute(^i32)&self.method, raw_data(items[:]), i32(len(items)))
+
+        im.checkbox("Wireframe", &self.options.wireframe)
+    }; im.end()
+
+    im.render()
 }
 
 voxel_state_draw :: proc(self: ^Voxel_State) {
     barrier: Pipeline_Barrier
 
-    if frame, ok := start_frame(); ok {
-        cmd := frame.command_buffer
-        
-        voxel_state_begin_rendering(self, cmd, &barrier)
-        vk.CmdEndRendering(cmd)
+    voxel_state_draw_imgui(self)
+    self.matrices.view = camera_view_matrix(&self.camera)
 
-        voxel_state_present_frame(self, cmd, frame, &barrier) 
+
+    if frame, ok := start_frame(); ok {
+        // Set options
+        vk.CmdSetPolygonModeEXT(frame.command_buffer, .LINE if self.options.wireframe else .FILL)
+
+        #partial switch self.method {
+        case .Instanced: instanced_draw(self, frame, &barrier)
+        case .Mesher:       mesher_draw(self, frame, &barrier)
+        } 
+        voxel_state_present_frame(self, frame, &barrier)
     }
 }
 
@@ -149,7 +232,7 @@ voxel_state_begin_rendering :: proc(self: ^Voxel_State,
 
     color_clear := vk.ClearValue {
         color = {
-            float32 = {0.2, 0.2, 0.2, 1.0},
+            float32 = {0., 0., 0., 1.0},
         }
     }
     
@@ -196,10 +279,10 @@ voxel_state_begin_rendering :: proc(self: ^Voxel_State,
 }
 
 voxel_state_present_frame :: proc(self: ^Voxel_State,
-    cmd: vk.CommandBuffer,
     frame: ^Frame_Data,
     barrier: ^Pipeline_Barrier,
 ) {
+    cmd := frame.command_buffer
     swapchain_image := get_swapchain().images[frame.image_index]
 
 
@@ -233,7 +316,7 @@ voxel_state_present_frame :: proc(self: ^Voxel_State,
         layers, layers,
     )
 
-    present_frame(frame,
+    draw_imgui_and_present_frame(frame,
             {.COPY}, {.TRANSFER_WRITE},
             .TRANSFER_DST_OPTIMAL)
 }

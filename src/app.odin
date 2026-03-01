@@ -6,7 +6,7 @@ import vk  "vendor:vulkan"
 
 WIDTH  :: 1600
 HEIGHT :: 900
-TITLE  : cstring : "vulkan_template"
+TITLE  : cstring : "voxel_renderer"
 
 App :: struct {
     window:   ^sdl.Window,
@@ -14,6 +14,7 @@ App :: struct {
     minimized: bool,
 
     voxel_state: Voxel_State,
+    mouse_captured: bool,
 }
 
 @(private="file")
@@ -62,6 +63,9 @@ init_app :: proc() -> (ok: bool) {
         log.errorf("failed to create a window:\n%s", sdl.GetError())
         return false
     }
+
+    self.mouse_captured = true
+    sdl.SetWindowRelativeMouseMode(self.window, self.mouse_captured) or_return
     
     init_vulkan() or_return
     init_imgui()  or_return
@@ -91,9 +95,15 @@ app_handle_event :: proc(event: sdl.Event) {
     case .QUIT: self.running = false
     case .WINDOW_MINIMIZED: self.minimized = true
     case .WINDOW_RESIZED:   app_handle_resize()
+    case .KEY_DOWN:
+        switch event.key.key {
+            case sdl.K_ESCAPE:
+                self.mouse_captured = !self.mouse_captured
+                ok := sdl.SetWindowRelativeMouseMode(self.window, self.mouse_captured)
+        }
     }
-
-    voxel_state_input(&self.voxel_state, event)
+    
+    voxel_state_event(&self.voxel_state, event)
 }
 
 app_wait_if_minimized :: proc() {
@@ -109,14 +119,21 @@ app_wait_if_minimized :: proc() {
 app_run :: proc() {
     event: sdl.Event
     barrier: Pipeline_Barrier
+    
+    last_time: f32 = 0.0
+    for self.running {
+        now := f32(sdl.GetTicks()) / 1000.0
+        dt := now - last_time
+        last_time = now
 
-    for self.running { 
         app_wait_if_minimized()
-        for sdl.PollEvent(&event) {
-            //imgui_process_event(&event)
-            app_handle_event(event)
-        } 
 
+        for sdl.PollEvent(&event) {
+            imgui_process_event(&event)
+            app_handle_event(event)
+        }
+        
+        voxel_state_update(&self.voxel_state, dt)
         voxel_state_draw(&self.voxel_state)
     }
 }

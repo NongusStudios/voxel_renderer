@@ -51,7 +51,7 @@ create_staging_buffer :: proc(size: vk.DeviceSize) -> (staging_buffer: Buffer, o
         size,
         { .TRANSFER_SRC }, 
         allocation_info(.Cpu_Only, { .HOST_VISIBLE, .HOST_COHERENT }, {.Mapped})
-    ) or_return 
+    ) or_return
 
     return staging_buffer, true
 }
@@ -788,7 +788,7 @@ pipeline_builder_default :: proc(self: ^Pipeline_Builder) {
         sType = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
         polygonMode = .FILL,
         cullMode    = vk.CullModeFlags_NONE,
-        frontFace   = .CLOCKWISE,
+        frontFace   = .COUNTER_CLOCKWISE,
         lineWidth   = 1.0,
     }
 
@@ -801,6 +801,7 @@ pipeline_builder_default :: proc(self: ^Pipeline_Builder) {
         sType = .PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
         depthTestEnable = false,
         depthWriteEnable = false,
+        depthBoundsTestEnable = false,
         depthCompareOp = .NEVER,
         front = {},
         back  = {},
@@ -897,7 +898,7 @@ pipeline_builder_set_multisampling :: proc(self: ^Pipeline_Builder,
 }
 
 pipeline_builder_enable_depth_test :: proc(self: ^Pipeline_Builder,
-    compare: vk.CompareOp = .LESS,
+    compare: vk.CompareOp = .GREATER_OR_EQUAL,
     write_enabled := b32(true),
 ) {
     self.depth_stencil.depthTestEnable = true
@@ -981,7 +982,7 @@ pipeline_builder_set_blend_logic_op :: proc(self: ^Pipeline_Builder, op: vk.Logi
     self.logic_op = op
 }
 
-pipeline_builder_add_color_attachment :: proc(self: ^Pipeline_Builder, format: vk.Format) {
+pipeline_builder_add_color_attachment_format :: proc(self: ^Pipeline_Builder, format: vk.Format) {
     assert(sa.len(self.color_attachment_formats) < MAX_PIPELINE_COLOR_ATTACHMENTS, "Reached maximum number of color attachments")
     sa.push_back(&self.color_attachment_formats, format)
 }

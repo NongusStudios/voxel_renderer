@@ -1,10 +1,12 @@
 package main
 
+import "core:math"
 import "core:mem"
 // Core
 import intr "base:intrinsics"
 import "base:runtime"
 import "core:log"
+import la "core:math/linalg"
 
 // Vendor
 import vk "vendor:vulkan"
@@ -33,6 +35,41 @@ check_vkb_error :: #force_inline proc(err: vkb.Error) -> bool {
         return false
     }
     return true
+}
+
+// Math
+
+float2 :: la.Vector2f32
+float3 :: la.Vector3f32
+float4 :: la.Vector4f32
+float4x4 :: la.Matrix4f32
+
+int32_3 :: [3]i32
+int3 :: [3]int
+
+matrix4_perspective_reverse_z_f32 :: proc "contextless" (
+    fovy, aspect, near: f32,
+    flip_y_axis := true,
+) -> (
+    m: float4x4,
+) #no_bounds_check {
+    epsilon :: 0.00000095367431640625 // 2^-20 or about 10^-6
+    fov_scale := 1 / math.tan(fovy * 0.5)
+
+    m[0, 0] = fov_scale / aspect
+    m[1, 1] = fov_scale
+
+    // Set up reverse-Z configuration
+    m[2, 2] = epsilon
+    m[2, 3] = near * (1 - epsilon)
+    m[3, 2] = -1
+
+    // Handle Vulkan Y-flip if needed
+    if flip_y_axis {
+        m[1, 1] = -m[1, 1]
+    }
+
+    return
 }
 
 // Resource Tracker, used for keeping track and deletion of user allocated vulkan resources

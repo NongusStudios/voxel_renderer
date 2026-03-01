@@ -32,7 +32,7 @@ main :: proc() {
         g_logger = log.create_console_logger()
         defer log.destroy_console_logger(g_logger)
         context.logger = g_logger
-	}
+	} 
 
     if !init_app() {
         return
