@@ -135,7 +135,7 @@ instanced_draw :: proc(self: ^Voxel_State, frame: ^Frame_Data, barrier: ^Pipelin
     push_constant := Instanced_Push_Constant {
         view_proj = self.matrices.projection * self.matrices.view,
         model     = self.matrices.model,
-        color     = { 0.2, 1.0, 0.4, 1.0 },
+        color     = VOXEL_COLOR,
 
         voxels = self.instanced.voxel_buffer_address,
     }

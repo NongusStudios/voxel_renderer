@@ -6,8 +6,6 @@ import sdl "vendor:sdl3"
 import vk  "vendor:vulkan"
 import im "../lib/imgui"
 
-VOXEL_COLOR :: float4 {1.0, 0.2, 0.2, 1.0}
-
 Render_Method :: enum i32 {
     Instanced,
     Mesher,
@@ -63,9 +61,6 @@ Voxel_State :: struct {
 
         cube_origin:     int32_3,
         cube_dimensions: int32_3,
-        
-        remove_min: int32_3,
-        remove_max: int32_3,
     }
 }
 
@@ -106,8 +101,8 @@ voxel_state_init_viewport :: proc(self: ^Voxel_State) -> (ok: bool) {
 voxel_state_init_voxels :: proc(self: ^Voxel_State) {
     self.chunk = create_chunk()
     
-    chunk_add_cube(&self.chunk, {0, 0, 0}, {CHUNK_SIZE, 1, CHUNK_SIZE})
-    chunk_add_sphere(&self.chunk, {CHUNK_SIZE/2, CHUNK_SIZE/2, CHUNK_SIZE/2}, 12)
+    chunk_add_cube(&self.chunk, 0, 0, 0, CHUNK_SIZE, 1, CHUNK_SIZE)
+    chunk_add_sphere(&self.chunk, CHUNK_SIZE/2, CHUNK_SIZE/2, CHUNK_SIZE/2, 12)
 
     instanced_sync_voxel_data(self)
     mesher_build_mesh(self)
@@ -195,85 +190,34 @@ voxel_state_update :: proc(self: ^Voxel_State, dt: f32) {
 voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
     imgui_new_frame()
     
-    update_voxels := false
-    if im.begin("Debug", nil, {.Always_Auto_Resize}) { 
-        im.checkbox("Wireframe", &self.gui.wireframe)
-    
-        if im.begin_menu("Place") {
-            im.text("Sphere:")
-            im.input_int3("sphere::origin", &self.gui.sphere_origin)
-            im.input_int("sphere::radius", &self.gui.sphere_radius)
-            
-            if im.button("sphere::place") {
-                o := self.gui.sphere_origin
-                oi := int3{
-                    int(o.x),
-                    int(o.y),
-                    int(o.z)
-                }
-                chunk_add_sphere(&self.chunk, oi, int(self.gui.sphere_radius))
-                update_voxels = true
-            }
-
-            im.text("Cube:")
-            im.input_int3("cube::origin", &self.gui.cube_origin)
-            im.input_int3("cube::dimensions", &self.gui.cube_dimensions)
-            if im.button("cube::place") {
-                o := self.gui.cube_origin
-                oi := int3{
-                    int(o.x),
-                    int(o.y),
-                    int(o.z)
-                }
-
-                d := self.gui.cube_dimensions
-                di := int3{
-                    int(d.x),
-                    int(d.y),
-                    int(d.z),
-                }
-
-                chunk_add_cube(&self.chunk, oi, di)
-                update_voxels = true
-            }
-
-            im.end_menu()
-        }
-
-        if im.begin_menu("Remove") {
-            im.input_int3("remove::min", &self.gui.remove_min)
-            im.input_int3("remove::max", &self.gui.remove_max)
-            if im.button("remove") {
-                for z in self.gui.remove_min.z..<self.gui.remove_max.z {
-                    for y in self.gui.remove_min.y..<self.gui.remove_max.y {
-                        for x in self.gui.remove_min.x..<self.gui.remove_max.x {
-                            p := int3{
-                                int(x),
-                                int(y),
-                                int(z),
-                            }
-                            if !chunk_position_in_bounds(p) { continue }
-                            chunk_unset(&self.chunk, p)
-                            update_voxels = true
-                        }
-                    }
-                }
-                
-            }
-            im.end_menu()
-        }
-
+    if im.begin("Debug", nil, {.Always_Auto_Resize}) {
         items := []cstring {
             "Instanced",
             "Mesher",
         }
         im.combo_char("Rendering Method", transmute(^i32)&self.method, raw_data(items[:]), i32(len(items)))
-    }; im.end()
+        
+        im.checkbox("Wireframe", &self.gui.wireframe)
     
-    if update_voxels {
-        instanced_sync_voxel_data(self)
-        mesher_build_mesh(self)
-    }
+        if im.begin_menu("Place") {
+            im.text("Sphere:")
+            im.input_int3("origin", &self.gui.sphere_origin)
+            im.input_int("radius", &self.gui.sphere_radius)
+            
+            update := false
+            if update = im.button("Place"); update {
+                x, y, z := self.gui.sphere_origin.
+                chunk_add_sphere_int(self, x, y, z, r)
+            }
+            
+            if update {
+                instanced_sync_voxel_data(self)
+                mesher_build_mesh(self)
+            }
+
+            im.end_menu()
+        }
+    }; im.end()
 
     im.render()
 }

@@ -1,12 +1,12 @@
 package main
 
+import "core:log"
 import la  "core:math/linalg"
 import vk  "vendor:vulkan"
-                                      // 32^2 * vertices * faces
-MESHER_VERTEX_BUFFER_INIT_CAPACITY :: 32 * 32 * 4        * 6
-
-                                      // 32^2 * indices * faces
-MESHER_INDEX_BUFFER_INIT_CAPACITY  :: 32 * 32 * 6       * 6
+                                      // size^2               * vertices * faces
+MESHER_VERTEX_BUFFER_INIT_CAPACITY :: CHUNK_SIZE * CHUNK_SIZE * 4        * 6
+                                      // size^2               * indices  * faces
+MESHER_INDEX_BUFFER_INIT_CAPACITY  :: CHUNK_SIZE * CHUNK_SIZE * 6        * 6
 
 @(require_results)
 mesher_init_buffers :: proc(self: ^Voxel_State) -> (ok: bool) {
@@ -88,8 +88,6 @@ mesher_destroy :: proc(self: ^Voxel_State) {
 
 // Grows the vertex and index buffers until they reach the desired size, desired size is in bytes.
 mesher_grow_buffer :: proc(self: ^Voxel_State, desired: vk.DeviceSize) -> (ok: bool) {
-    vk.DeviceWaitIdle(get_device())
-
     vertex_next_size := self.mesher.vertex_buffer.size
     index_next_size  := self.mesher.index_buffer.size
     for vertex_next_size < desired {
@@ -97,6 +95,8 @@ mesher_grow_buffer :: proc(self: ^Voxel_State, desired: vk.DeviceSize) -> (ok: b
         index_next_size  += MESHER_INDEX_BUFFER_INIT_CAPACITY * size_of(u32)
     }
     
+    // Wait for current frame to finish before recreating the buffer
+    vk.DeviceWaitIdle(get_device())
     destroy_buffer(self.mesher.vertex_buffer)
     destroy_buffer(self.mesher.index_buffer)
     destroy_buffer(self.mesher.staging_buffer)
@@ -117,6 +117,8 @@ mesher_grow_buffer :: proc(self: ^Voxel_State, desired: vk.DeviceSize) -> (ok: b
     self.mesher.staging_buffer = create_staging_buffer(
         self.mesher.vertex_buffer.size + self.mesher.index_buffer.size
     ) or_return
+
+    log.infof("mesher buffers resized: %v", self.mesher.vertex_buffer.size)
 
     return true
 }
@@ -156,35 +158,31 @@ mesher_build_mesh :: proc(self: ^Voxel_State) {
         )
     }
 
-    for z in 0..<CHUNK_SIZE {
-        for y in 0..<CHUNK_SIZE {
-            for x in 0..<CHUNK_SIZE {
-                if chunk_at(&self.chunk, x, y, z)^ == 0 { continue }
-                
-                neighbours := [?]int3 {
-                    // Front/Back
-                    int3{x, y, min(z + 1, CHUNK_SIZE-1)},
-                    int3{x, y, max(z - 1, 0)},
-                    
-                    // Left/Right
-                    int3{max(x - 1, 0), y, z},
-                    int3{min(x + 1, CHUNK_SIZE-1), y, z},
+    for pos, _ in self.chunk.solid {
+        x, y, z := pos.x, pos.y, pos.z
+        neighbours := [?]int3 {
+            // Front/Back
+            {x, y, min(z + 1, CHUNK_SIZE-1)},
+            {x, y, max(z - 1, 0)},
+            
+            // Left/Right
+            {max(x - 1, 0), y, z},
+            {min(x + 1, CHUNK_SIZE-1), y, z},
 
-                    // Top/Bottom
-                    int3{x, min(y + 1, CHUNK_SIZE-1), z},
-                    int3{x, max(y - 1, 0), z},
-                }
+            // Top/Bottom
+            {x, min(y + 1, CHUNK_SIZE-1), z},
+            {x, max(y - 1, 0), z},
+        }
 
-                for neighbour, i in neighbours {
-                    if neighbour == {x, y, z} {
-                        push_face(self, faces[i], x, y, z)
-                        continue
-                    }
+        for neighbour, i in neighbours {
+            // Push faces for cubes on the edge of the chunk
+            if neighbour == {x, y, z} {
+                push_face(self, faces[i], x, y, z)
+                continue
+            }
 
-                    if chunk_at(&self.chunk, neighbour)^ == 0 {
-                        push_face(self, faces[i], x, y, z)
-                    }
-                }
+            if chunk_at(&self.chunk, neighbour)^ == 0 {
+                push_face(self, faces[i], x, y, z)
             }
         }
     }
@@ -259,7 +257,7 @@ mesher_draw :: proc(self: ^Voxel_State, frame: ^Frame_Data, barrier: ^Pipeline_B
     push_contant := Mesher_Push_Constant {
         view_proj = self.matrices.projection * self.matrices.view,
         model     = self.matrices.model,
-        color     = { 0.2, 1.0, 0.4, 1.0 },
+        color     = VOXEL_COLOR,
         vertex_buffer = self.mesher.vertex_buffer_address,
     }
     vk.CmdPushConstants(cmd,
