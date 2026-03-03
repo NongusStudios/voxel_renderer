@@ -131,6 +131,10 @@ get_current_frame :: #force_inline proc() -> ^Frame_Data #no_bounds_check {
     return &self.frames[self.current_frame % FRAME_OVERLAP]
 }
 
+get_previous_frame :: #force_inline proc() -> ^Frame_Data #no_bounds_check {
+    return &self.frames[self.current_frame - 1 % FRAME_OVERLAP]
+}
+
 // Adds resource to the global tracker 
 track_resources :: proc(args: ..Resource) {
     for res in args {

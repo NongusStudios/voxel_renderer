@@ -4,6 +4,8 @@ import "core:math"
 import la "core:math/linalg"
 import sdl "vendor:sdl3"
 
+CAMERA_SPEED :: 20.0
+
 Camera :: struct {
     position: float3,
     yaw: f32,
@@ -47,7 +49,11 @@ camera_input :: proc(self: ^Camera, event: sdl.Event) {
 camera_update :: proc(self: ^Camera, dt: f32) {
     keys := sdl.GetKeyboardState(nil)
 
-    speed := 10.0 * dt
+    speed := CAMERA_SPEED * dt
+    if keys[sdl.Scancode.LSHIFT] {
+        speed *= 3.0
+    }
+
     forward := camera_forward_vector(self)
     forward.y = 0.0
 

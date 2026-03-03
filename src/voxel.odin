@@ -7,7 +7,7 @@ import vk  "vendor:vulkan"
 import im "../lib/imgui"
 
 VOXEL_COLOR :: float4 {1.0, 0.2, 0.2, 1.0}
-WORLD_SIZE  :: 4
+WORLD_SIZE  :: 8
 
 Render_Method :: enum i32 {
     Mesher,
@@ -16,7 +16,6 @@ Render_Method :: enum i32 {
 }
 
 Voxel_State :: struct {
-    chunk: Chunk,
     world: World,
 
     method: Render_Method,
@@ -27,19 +26,12 @@ Voxel_State :: struct {
     viewport_extent:  vk.Extent2D,
     
     mesher: struct {
-        vertex_buffer:  Buffer,
-        index_buffer:   Buffer,
-        staging_buffer: Buffer,
-        vertex_buffer_address: vk.DeviceAddress,
-
-        chunk_objects: []Mesher_Chunk_Objects,
+        chunk_data: []Mesher_Chunk_Data,
 
         pipeline: Pipeline,
         
         vertex_data: [dynamic]Vertex,
         index_data:  [dynamic]u32,
-        
-        update_queued: bool,
     },
 
     camera:      Camera, 
@@ -99,13 +91,13 @@ voxel_state_init_viewport :: proc(self: ^Voxel_State) -> (ok: bool) {
 }
 
 create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
-    self.chunk = create_chunk()
-    chunk_add_cube(&self.chunk, {0, 0, 0}, {64, 4, 64})
-    mesher_build_mesh(&self)
-
-    self.world = create_world(WORLD_SIZE)
-
     self.method = .Mesher
+    self.world = create_world(WORLD_SIZE)
+    world_add_cube(&self.world, {0, 0, 0}, {
+        self.world.size * CHUNK_SIZE,
+        5,
+        self.world.size * CHUNK_SIZE,
+    })
 
     voxel_state_init_viewport(&self) or_return
 
@@ -133,8 +125,7 @@ create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
     self.camera.position = float3{0.0, 0.0, 20.0}
     self.matrices.view = camera_view_matrix(&self.camera)
  
-    self.matrices.model = la.matrix4_scale(float3{0.5, 0.5, 0.5})
-    self.matrices.model *= la.matrix4_translate(float3{
+    self.matrices.model = la.matrix4_translate(float3{
         -f32(CHUNK_SIZE) / 2.0,
         -f32(CHUNK_SIZE) / 2.0,
         -f32(CHUNK_SIZE) / 2.0,
@@ -145,7 +136,6 @@ create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
 
 destroy_voxel_state :: proc(self: ^Voxel_State) {
     destroy_world(&self.world)
-    destroy_chunk(&self.chunk)
 
     vk.DeviceWaitIdle(get_device())
     mesher_destroy(self)
@@ -184,7 +174,6 @@ voxel_state_update :: proc(self: ^Voxel_State, dt: f32) {
 voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
     imgui_new_frame()
     
-    update_voxels := false
     if im.begin("Debug", nil, {.Always_Auto_Resize}) { 
         im.checkbox("Wireframe", &self.gui.wireframe)
     
@@ -200,8 +189,7 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
                     int(o.y),
                     int(o.z)
                 }
-                chunk_add_sphere(&self.chunk, oi, int(self.gui.sphere_radius))
-                update_voxels = true
+                world_add_sphere(&self.world, oi, int(self.gui.sphere_radius))
             }
 
             im.text("Cube:")
@@ -222,8 +210,7 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
                     int(d.z),
                 }
 
-                chunk_add_cube(&self.chunk, oi, di)
-                update_voxels = true
+                world_add_cube(&self.world, oi, di)
             }
 
             im.end_menu()
@@ -242,8 +229,7 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
                                 int(z),
                             }
                             if !chunk_position_in_bounds(p) { continue }
-                            chunk_unset(&self.chunk, p)
-                            update_voxels = true
+                            world_unset(&self.world, p)
                         }
                     }
                 }
@@ -258,10 +244,6 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
         im.combo_char("Rendering Method", transmute(^i32)&self.method, raw_data(items[:]), i32(len(items)))
     }; im.end()
     
-    if update_voxels {
-        mesher_build_mesh(self)
-    }
-
     im.render()
 }
 
