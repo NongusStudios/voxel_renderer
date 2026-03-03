@@ -2,7 +2,7 @@ package main
 
 import "core:math"
 // Size of a chunk on any given axis
-CHUNK_SIZE :: 64
+CHUNK_SIZE :: 32
 
 // Total amount of voxels per chunk
 CHUNK_FLAT_SIZE :: CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE

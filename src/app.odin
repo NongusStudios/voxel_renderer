@@ -15,6 +15,7 @@ App :: struct {
 
     voxel_state: Voxel_State,
     mouse_captured: bool,
+    dt: f32,
 }
 
 @(private="file")
@@ -58,7 +59,7 @@ init_app :: proc() -> (ok: bool) {
         return false
     }
 
-    self.window = sdl.CreateWindow(TITLE, WIDTH, HEIGHT, {.VULKAN})
+    self.window = sdl.CreateWindow(TITLE, WIDTH, HEIGHT, {.VULKAN, .RESIZABLE})
     if self.window == nil {
         log.errorf("failed to create a window:\n%s", sdl.GetError())
         return false
@@ -123,7 +124,7 @@ app_run :: proc() {
     last_time: f32 = 0.0
     for self.running {
         now := f32(sdl.GetTicks()) / 1000.0
-        dt := now - last_time
+        self.dt = now - last_time
         last_time = now
 
         app_wait_if_minimized()
@@ -133,7 +134,7 @@ app_run :: proc() {
             app_handle_event(event)
         }
         
-        voxel_state_update(&self.voxel_state, dt)
+        voxel_state_update(&self.voxel_state, self.dt)
         voxel_state_draw(&self.voxel_state)
     }
 }
