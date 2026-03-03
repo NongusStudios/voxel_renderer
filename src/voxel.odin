@@ -7,9 +7,9 @@ import vk  "vendor:vulkan"
 import im "../lib/imgui"
 
 VOXEL_COLOR :: float4 {1.0, 0.2, 0.2, 1.0}
+WORLD_SIZE  :: 4
 
 Render_Method :: enum i32 {
-    Instanced,
     Mesher,
     Mesher_Gpu,
     Ray_Traversal,
@@ -17,6 +17,7 @@ Render_Method :: enum i32 {
 
 Voxel_State :: struct {
     chunk: Chunk,
+    world: World,
 
     method: Render_Method,
 
@@ -25,19 +26,13 @@ Voxel_State :: struct {
     depth_attachment: Image,
     viewport_extent:  vk.Extent2D,
     
-    instanced: struct {
-        vertex_buffer: Buffer,
-        index_buffer:  Buffer,
-        voxel_buffer: Buffer,
-        voxel_buffer_address: vk.DeviceAddress,
-        pipeline: Pipeline,
-    },
-    
     mesher: struct {
         vertex_buffer:  Buffer,
         index_buffer:   Buffer,
         staging_buffer: Buffer,
         vertex_buffer_address: vk.DeviceAddress,
+
+        chunk_objects: []Mesher_Chunk_Objects,
 
         pipeline: Pipeline,
         
@@ -103,27 +98,21 @@ voxel_state_init_viewport :: proc(self: ^Voxel_State) -> (ok: bool) {
     return true
 }
 
-voxel_state_init_voxels :: proc(self: ^Voxel_State) {
-    self.chunk = create_chunk()
-    
-    chunk_add_cube(&self.chunk, {0, 0, 0}, {CHUNK_SIZE, 1, CHUNK_SIZE})
-    chunk_add_sphere(&self.chunk, {CHUNK_SIZE/2, CHUNK_SIZE/2, CHUNK_SIZE/2}, 12)
-
-    instanced_sync_voxel_data(self)
-    mesher_build_mesh(self)
-}
-
 create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
+    self.chunk = create_chunk()
+    chunk_add_cube(&self.chunk, {0, 0, 0}, {64, 4, 64})
+    mesher_build_mesh(&self)
+
+    self.world = create_world(WORLD_SIZE)
+
     self.method = .Mesher
 
     voxel_state_init_viewport(&self) or_return
 
-    instanced_init(&self) or_return
     mesher_init(&self) or_return
 
     onetime_tracker := create_resource_tracker(); defer destroy_resource_tracker(&onetime_tracker)
     cmd := start_one_time_commands() or_return
-        instanced_upload_data(&self, cmd, &onetime_tracker) or_return
 
         // Initial depth attachment layout
         barrier: Pipeline_Barrier
@@ -149,17 +138,17 @@ create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
         -f32(CHUNK_SIZE) / 2.0,
         -f32(CHUNK_SIZE) / 2.0,
         -f32(CHUNK_SIZE) / 2.0,
-    })
-
-    voxel_state_init_voxels(&self)
+    }) 
 
     return self, true
 }
 
 destroy_voxel_state :: proc(self: ^Voxel_State) {
+    destroy_world(&self.world)
+    destroy_chunk(&self.chunk)
+
     vk.DeviceWaitIdle(get_device())
     mesher_destroy(self)
-    destroy_chunk(&self.chunk)
 }
 
 get_projection_matrix :: proc(fov: f32 = 80.0) -> float4x4 {
@@ -264,14 +253,12 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
         }
 
         items := []cstring {
-            "Instanced",
             "Mesher",
         }
         im.combo_char("Rendering Method", transmute(^i32)&self.method, raw_data(items[:]), i32(len(items)))
     }; im.end()
     
     if update_voxels {
-        instanced_sync_voxel_data(self)
         mesher_build_mesh(self)
     }
 
@@ -290,7 +277,6 @@ voxel_state_draw :: proc(self: ^Voxel_State) {
         vk.CmdSetPolygonModeEXT(frame.command_buffer, .LINE if self.gui.wireframe else .FILL)
 
         #partial switch self.method {
-        case .Instanced: instanced_draw(self, frame, &barrier)
         case .Mesher:       mesher_draw(self, frame, &barrier)
         } 
         voxel_state_present_frame(self, frame, &barrier)
