@@ -57,7 +57,7 @@ benchmark_get_metric_total :: proc(metric: string) -> time.Duration {
 benchmark_get_metric_avg :: proc(metric: string) -> time.Duration {
     m := get_metric(metric)
     
-    n := min(1, len(m.readings))
+    n := max(1, len(m.readings))
 
     return m.total / time.Duration(n)
 }

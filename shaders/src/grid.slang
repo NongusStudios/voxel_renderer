@@ -8,5 +8,5 @@ struct Push_Constant {
 
 [shader("vertex")]
 float4 vertex_main(uint instance_index: SV_InstanceID): SV_Position {
-    
+    return float4(0.0);
 }
