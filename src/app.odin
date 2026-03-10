@@ -59,7 +59,7 @@ init_app :: proc() -> (ok: bool) {
         return false
     }
 
-    self.window = sdl.CreateWindow(TITLE, WIDTH, HEIGHT, {.VULKAN, .RESIZABLE})
+    self.window = sdl.CreateWindow(TITLE, WIDTH, HEIGHT, {.VULKAN})
     if self.window == nil {
         log.errorf("failed to create a window:\n%s", sdl.GetError())
         return false
@@ -71,6 +71,10 @@ init_app :: proc() -> (ok: bool) {
     init_vulkan() or_return
     init_imgui()  or_return
 
+    init_benchmark()
+    benchmark_add_metric("terrain_gen")
+    benchmark_add_metric("chunk_mesh")
+
     self.voxel_state = create_voxel_state() or_return
 
     self.running = true
@@ -79,6 +83,7 @@ init_app :: proc() -> (ok: bool) {
 
 destroy_app :: proc() {
     destroy_voxel_state(&self.voxel_state)
+    destroy_benchmark()
     cleanup_vulkan()
 
     sdl.DestroyWindow(self.window)

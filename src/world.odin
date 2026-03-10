@@ -4,14 +4,12 @@ import "core:math"
 World :: struct {
     chunks: []Chunk,
     size: int,
-    flat_size: int,
     updates: map[int3]u8,
 }
 
 create_world :: proc(size: int) -> (self: World) {
     self.size = size
-    self.flat_size = size * size * size
-    self.chunks = make([]Chunk, self.flat_size)
+    self.chunks = make([]Chunk, size * size * size)
     for &chunk in self.chunks {
         chunk_init(&chunk)
     }

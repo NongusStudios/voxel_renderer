@@ -1,5 +1,6 @@
 package main
 
+import "core:log"
 import "core:math"
 import "core:time"
 import "core:math/noise"
@@ -10,7 +11,7 @@ import vk  "vendor:vulkan"
 import im "../lib/imgui"
 
 VOXEL_COLOR :: float4 {1.0, 0.2, 0.2, 1.0}
-WORLD_SIZE  :: 8
+WORLD_SIZE  :: 16
 
 Render_Method :: enum i32 {
     Mesher,
@@ -102,10 +103,9 @@ voxel_state_generate_terrain :: proc(self: ^Voxel_State) {
                 f64(z)*0.008,
             })
             
-            n += 1.0
-            n /= 2.0
+            n =  (n + 1.0) * 0.5
             h := int(math.round(n * CHUNK_SIZE))
-            for y in 0..<h+CHUNK_SIZE {
+            for y in 0..<h+1 {
                 world_set(&self.world, {x, y, z})
             }
         }
@@ -115,8 +115,12 @@ voxel_state_generate_terrain :: proc(self: ^Voxel_State) {
 create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
     self.method = .Mesher
     self.world = create_world(WORLD_SIZE)
+    
+    benchmark_start_reading("terrain_gen")
     voxel_state_generate_terrain(&self)    
-
+    benchmark_end_reading("terrain_gen")
+    log.info("Terrain generated in: ", time.duration_seconds(benchmark_get_readings("terrain_gen")[0]), "s")
+    
     voxel_state_init_viewport(&self) or_return
 
     mesher_init(&self) or_return
@@ -140,14 +144,14 @@ create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
     // Setup projection, view and model matrices
     self.matrices.projection = get_projection_matrix()
 
-    self.camera.position = float3{0.0, CHUNK_SIZE * 3, 0.0}
+    self.camera.position = float3{0, CHUNK_SIZE * 2 + 5, 0}
     self.matrices.view = camera_view_matrix(&self.camera)
  
     self.matrices.model = la.matrix4_scale(float3{2.0, 2.0, 2.0})
     self.matrices.model *= la.matrix4_translate(float3{
-        -f32(CHUNK_SIZE) / 2.0,
-        -f32(CHUNK_SIZE) / 2.0,
-        -f32(CHUNK_SIZE) / 2.0,
+        -(WORLD_SIZE * CHUNK_SIZE) / 2.0,
+        0,
+        -(WORLD_SIZE * CHUNK_SIZE) / 2.0,
     }) 
 
     return self, true
@@ -283,7 +287,10 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
             "Mesher",
         }
         im.combo_char("Rendering Method", transmute(^i32)&self.method, raw_data(items[:]), i32(len(items)))
-        im.text("Frametime: %f", frame_avg)
+        im.text("Frame Time: %f s", frame_avg)
+        im.text("Avg Mesh Gen: %f ms", time.duration_milliseconds(
+            benchmark_get_metric_avg("chunk_mesh"),
+        ))
     }; im.end()
     
     im.render()

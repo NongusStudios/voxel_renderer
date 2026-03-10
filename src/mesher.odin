@@ -1,11 +1,33 @@
 package main
 
+import "core:log"
+import "core:time"
 import la  "core:math/linalg"
 import vk  "vendor:vulkan"
                                       // size^2               * vertices * faces
 MESHER_VERTEX_BUFFER_INIT_CAPACITY :: CHUNK_SIZE * CHUNK_SIZE * 4        * 6
                                       // size^2               * indices  * faces
 MESHER_INDEX_BUFFER_INIT_CAPACITY  :: CHUNK_SIZE * CHUNK_SIZE * 6        * 6
+
+// Binary Mesher
+Face :: enum {
+    Pos_X,
+    Neg_X,
+    Pos_Y,
+    Neg_Y,
+    Pos_Z,
+    Neg_Z,
+}
+
+Mesher_Quad :: struct {
+    face: Face,
+    offset: int3,
+    dimensions: int3,
+}
+
+binary_mesher_build_mesh :: proc(self: ^Voxel_State, chunk_pos: int3, quads: ^[dynamic]Mesher_Quad) {
+
+}
 
 Mesher_Chunk_Data :: struct {
     vertex_buffer:  Buffer,
@@ -82,7 +104,7 @@ mesher_init_pipelines :: proc(self: ^Voxel_State) -> (ok: bool) {
 mesher_init :: proc(self: ^Voxel_State) -> (ok: bool) {
     self.mesher.vertex_data   = make([dynamic]Vertex, 0, MESHER_VERTEX_BUFFER_INIT_CAPACITY)
     self.mesher.index_data    = make([dynamic]u32,    0, MESHER_INDEX_BUFFER_INIT_CAPACITY)
-    self.mesher.chunk_data = make([]Mesher_Chunk_Data, self.world.flat_size)
+    self.mesher.chunk_data = make([]Mesher_Chunk_Data, len(self.world.chunks))
     
     mesher_init_chunk_data(self) or_return
     mesher_init_pipelines(self) or_return
@@ -146,7 +168,9 @@ mesher_get_chunk_data :: proc(self: ^Voxel_State, pos: int3) -> ^Mesher_Chunk_Da
 }
 
 // Rebuilds the voxel mesh for a specific chunk and queues relevant buffers for update for the next frame
-mesher_build_chunk_mesh :: proc(self: ^Voxel_State, chunk_pos: int3) {
+mesher_build_chunk :: proc(self: ^Voxel_State, chunk_pos: int3) {
+    chunk := world_get_chunk(&self.world, chunk_pos)
+
     clear(&self.mesher.vertex_data)
     clear(&self.mesher.index_data)
 
@@ -179,8 +203,6 @@ mesher_build_chunk_mesh :: proc(self: ^Voxel_State, chunk_pos: int3) {
             base, base + 2, base + 3,
         )
     }
-
-    chunk := world_get_chunk(&self.world, chunk_pos)
 
     for pos, _ in chunk.solid {
         x, y, z := pos.x + CHUNK_SIZE * chunk_pos.x, 
@@ -215,7 +237,7 @@ mesher_build_chunk_mesh :: proc(self: ^Voxel_State, chunk_pos: int3) {
     }
 
     // Grow buffers if necessary
-    chunk_data := mesher_get_chunk_data(self, chunk_pos) 
+    chunk_data := mesher_get_chunk_data(self, chunk_pos)
 
     vertex_data_size := vk.DeviceSize(len(self.mesher.vertex_data) * size_of(Vertex))
     if vertex_data_size > chunk_data.vertex_buffer.size {
@@ -239,15 +261,16 @@ mesher_draw :: proc(self: ^Voxel_State, frame: ^Frame_Data, barrier: ^Pipeline_B
     
     // Upload to Gpu buffers after world update
     for chunk_pos, _ in self.world.updates {
+        benchmark_start_reading("chunk_mesh")
         // Rebuild mesh
-        mesher_build_chunk_mesh(self, chunk_pos)
+        mesher_build_chunk(self, chunk_pos)
 
         // Copy new data
         data := mesher_get_chunk_data(self, chunk_pos)
         
         /*
             Chunks that are completely solid and are also surrounded by solid voxels on neighbouring chunks
-            will have no vertices to display. Trying to copy 0 bytes to a buffer cause vulkan to crash, so these
+            will have no vertices to display. Trying to copy 0 bytes to a buffer causes a crash, so these
             chunks get skipped.
         */
         if data.vertex_count == 0 {
@@ -289,9 +312,10 @@ mesher_draw :: proc(self: ^Voxel_State, frame: ^Frame_Data, barrier: ^Pipeline_B
             data.index_buffer.buffer,
         )
         cmd_pipeline_barrier(cmd, barrier)
+
+        benchmark_end_reading("chunk_mesh")
     }
     clear(&self.world.updates)
-
 
     voxel_state_begin_rendering(self, cmd, barrier)
     vk.CmdBindPipeline(cmd, .GRAPHICS, self.mesher.pipeline.pipeline)

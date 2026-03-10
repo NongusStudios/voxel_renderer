@@ -1,6 +1,5 @@
 package main
 
-import "core:math"
 // Size of a chunk on any given axis
 CHUNK_SIZE :: 32
 
