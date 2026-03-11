@@ -4,7 +4,7 @@ import "core:math"
 import la "core:math/linalg"
 import sdl "vendor:sdl3"
 
-CAMERA_SPEED :: 20.0
+CAMERA_SPEED :: 30.0
 
 Camera :: struct {
     position: float3,
@@ -51,7 +51,7 @@ camera_update :: proc(self: ^Camera, dt: f32) {
 
     speed := CAMERA_SPEED * dt
     if keys[sdl.Scancode.LSHIFT] {
-        speed *= 3.0
+        speed *= 5.0
     }
 
     forward := camera_forward_vector(self)

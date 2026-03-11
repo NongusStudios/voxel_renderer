@@ -69,8 +69,8 @@ mesher_init_pipelines :: proc(self: ^Voxel_State) -> (ok: bool) {
     builder := create_pipeline_builder(); defer destroy_pipeline_builder(&builder)
 
     pipeline_builder_add_color_attachment_format(&builder, self.color_attachment.format)
-    pipeline_builder_set_depth_attachment_format(&builder, .D32_SFLOAT)
 
+    pipeline_builder_set_depth_attachment_format(&builder, .D32_SFLOAT)
     pipeline_builder_enable_depth_test(&builder, .GREATER)
     
     // Each color attachment needs blend state
@@ -318,9 +318,12 @@ mesher_draw :: proc(self: ^Voxel_State, frame: ^Frame_Data, barrier: ^Pipeline_B
     clear(&self.world.updates)
 
     voxel_state_begin_rendering(self, cmd, barrier)
+    view_proj := self.matrices.projection * self.matrices.view
+ 
+    /* draw world chunks */
     vk.CmdBindPipeline(cmd, .GRAPHICS, self.mesher.pipeline.pipeline)
     push_contant := Mesher_Push_Constant {
-        view_proj = self.matrices.projection * self.matrices.view,
+        view_proj = view_proj,
         model     = self.matrices.model,
         color     = VOXEL_COLOR,
     }
@@ -346,5 +349,8 @@ mesher_draw :: proc(self: ^Voxel_State, frame: ^Frame_Data, barrier: ^Pipeline_B
             }
         }
     }
+
+    voxel_state_draw_grid(self, cmd, view_proj) 
+
     vk.CmdEndRendering(cmd)
 }

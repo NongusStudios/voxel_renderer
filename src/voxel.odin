@@ -10,7 +10,7 @@ import sdl "vendor:sdl3"
 import vk  "vendor:vulkan"
 import im "../lib/imgui"
 
-VOXEL_COLOR :: float4 {1.0, 0.2, 0.2, 1.0}
+VOXEL_COLOR :: float4 {0.3, 1.0, 0.4, 1.0}
 WORLD_SIZE  :: 16
 
 Render_Method :: enum i32 {
@@ -38,6 +38,8 @@ Voxel_State :: struct {
         index_data:  [dynamic]u32,
     },
 
+    grid_pipeline: Pipeline,
+
     camera:      Camera, 
 
     matrices: struct {
@@ -48,6 +50,7 @@ Voxel_State :: struct {
 
     gui: struct {
         wireframe: bool,
+        grid: bool,
 
         sphere_origin: int32_3,
         sphere_radius: i32,
@@ -94,6 +97,37 @@ voxel_state_init_viewport :: proc(self: ^Voxel_State) -> (ok: bool) {
     return true
 }
 
+voxel_state_create_pipelines :: proc(self: ^Voxel_State) -> (ok: bool) {
+    builder := create_pipeline_builder(); defer destroy_pipeline_builder(&builder)
+    pipeline_builder_add_color_attachment_format(&builder, self.color_attachment.format)
+    pipeline_builder_set_depth_attachment_format(&builder, .D32_SFLOAT)
+    pipeline_builder_add_blend_attachment_alphablend(&builder)
+    pipeline_builder_enable_depth_test(&builder)
+
+    pipeline_builder_add_push_constant_range(&builder, {
+        stageFlags = {.VERTEX, .FRAGMENT},
+        size = size_of(Grid_Push_Constant),
+    })
+
+    pipeline_builder_set_topology(&builder, .LINE_LIST)
+
+    module := create_shader_module(#load("../shaders/grid.spv")) or_return
+    defer vk.DestroyShaderModule(get_device(), module, nil)
+
+    pipeline_builder_add_shader_stage(&builder, .VERTEX,   module, "vertex_main")
+    pipeline_builder_add_shader_stage(&builder, .FRAGMENT, module, "fragment_main")
+
+    pipeline_builder_add_dynamic_state(&builder, .POLYGON_MODE_EXT)
+
+    self.grid_pipeline = pipeline_builder_build(&builder) or_return
+
+    track_resources(
+        self.grid_pipeline,
+    )
+
+    return true
+}
+
 voxel_state_generate_terrain :: proc(self: ^Voxel_State) {
     seed := time.now()._nsec
     for z in 0..<WORLD_SIZE*CHUNK_SIZE {
@@ -119,9 +153,10 @@ create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
     benchmark_start_reading("terrain_gen")
     voxel_state_generate_terrain(&self)    
     benchmark_end_reading("terrain_gen")
-    log.info("Terrain generated in: ", time.duration_seconds(benchmark_get_readings("terrain_gen")[0]), "s")
+    log.info("Terrain generated in: ", time.duration_seconds(benchmark_get_last_reading("terrain_gen")), "s")
     
     voxel_state_init_viewport(&self) or_return
+    voxel_state_create_pipelines(&self) or_return
 
     mesher_init(&self) or_return
 
@@ -221,6 +256,7 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
     
     if im.begin("Debug", nil, {.Always_Auto_Resize}) { 
         im.checkbox("Wireframe", &self.gui.wireframe)
+        im.checkbox("Draw Grid", &self.gui.grid)
     
         if im.begin_menu("Place") {
             im.text("Sphere:")
@@ -294,6 +330,30 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
     }; im.end()
     
     im.render()
+}
+
+voxel_state_draw_grid :: proc(self: ^Voxel_State, cmd: vk.CommandBuffer, view_proj: float4x4) {
+    if self.gui.grid {
+        vk.CmdBindPipeline(cmd, .GRAPHICS, self.grid_pipeline.pipeline)
+        
+        push_constant := Grid_Push_Constant {
+            view_proj = view_proj,
+            model     = self.matrices.model,
+            world_size = u32(self.world.size),
+            chunk_size = CHUNK_SIZE,
+        }
+
+        vk.CmdPushConstants(cmd,
+            self.grid_pipeline.layout,
+            {.VERTEX, .FRAGMENT},
+            0, size_of(Grid_Push_Constant),
+            &push_constant,
+        )
+
+        instance_count := self.world.size+1
+        instance_count *= instance_count
+        vk.CmdDraw(cmd, 6, u32(instance_count), 0, 0)
+    }
 }
 
 voxel_state_draw :: proc(self: ^Voxel_State) {

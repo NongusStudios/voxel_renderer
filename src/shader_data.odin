@@ -2,20 +2,19 @@ package main
 
 import vk "vendor:vulkan"
 
-Instanced_Push_Constant :: struct {
-    view_proj: float4x4,
-    model:     float4x4,
-    color:     float4,
-
-    voxels: vk.DeviceAddress,
-}
-
 Mesher_Push_Constant :: struct {
     view_proj: float4x4,
     model:     float4x4,
     color:     float4,
 
     vertex_buffer: vk.DeviceAddress,
+}
+
+Grid_Push_Constant :: struct {
+    view_proj: float4x4,
+    model:     float4x4,
+    world_size: u32,
+    chunk_size: u32,
 }
 
 Vertex :: struct {
