@@ -47,6 +47,13 @@ float4x4 :: la.Matrix4f32
 int32_3 :: [3]i32
 int3 :: [3]int
 
+int3_zero :: int3{0, 0, 0}
+int3_one :: int3{1, 1, 1}
+
+int3_scalar :: #force_inline proc($N: int) -> int3 {
+    return int3{N, N, N}
+}
+
 matrix4_perspective_reverse_z_f32 :: proc "contextless" (
     fovy, aspect, near: f32,
     flip_y_axis := true,

@@ -1,33 +1,14 @@
 package main
 
+import "vendor:x11/xlib"
 import "core:log"
-import "core:time"
+import intr "base:intrinsics"
 import la  "core:math/linalg"
 import vk  "vendor:vulkan"
                                       // size^2               * vertices * faces
 MESHER_VERTEX_BUFFER_INIT_CAPACITY :: CHUNK_SIZE * CHUNK_SIZE * 4        * 6
                                       // size^2               * indices  * faces
 MESHER_INDEX_BUFFER_INIT_CAPACITY  :: CHUNK_SIZE * CHUNK_SIZE * 6        * 6
-
-// Binary Mesher
-Face :: enum {
-    Pos_X,
-    Neg_X,
-    Pos_Y,
-    Neg_Y,
-    Pos_Z,
-    Neg_Z,
-}
-
-Mesher_Quad :: struct {
-    face: Face,
-    offset: int3,
-    dimensions: int3,
-}
-
-binary_mesher_build_mesh :: proc(self: ^Voxel_State, chunk_pos: int3, quads: ^[dynamic]Mesher_Quad) {
-
-}
 
 Mesher_Chunk_Data :: struct {
     vertex_buffer:  Buffer,
@@ -167,13 +148,186 @@ mesher_get_chunk_data :: proc(self: ^Voxel_State, pos: int3) -> ^Mesher_Chunk_Da
                                    pos.z * self.world.size * self.world.size]
 }
 
+// Binary Mesher
+Face :: enum {
+    Left,
+    Right,
+    Bottom,
+    Top,
+    Back,
+    Front,
+}
+
+Mesher_Quad :: struct {
+    face: Face,
+    pos: int3,
+    dimensions: int3,
+}
+
+binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3, quads: ^[dynamic]Mesher_Quad) {
+    // Array size is padded to include voxels outside the current chunk
+    CHUNK_SIZE_PADDED :: CHUNK_SIZE + 2
+    
+    // Binary representation of voxel data along each axis
+    cols: [3][CHUNK_SIZE_PADDED][CHUNK_SIZE_PADDED]u64
+
+    // Binary representation of non-culled faces on each axis in both directions
+    face_masks: [6][CHUNK_SIZE_PADDED][CHUNK_SIZE_PADDED]u64
+
+    // Create binary mask of voxel data
+    for z in 0..<CHUNK_SIZE_PADDED {
+        for y in 0..<CHUNK_SIZE_PADDED {
+            for x in 0..<CHUNK_SIZE_PADDED {
+                // Get world pos
+                pos := (int3{x, y, z} + chunk_pos * CHUNK_SIZE) - int3_one
+                max_pos := self.world.size * CHUNK_SIZE
+                if pos.x < 0 || pos.x >= max_pos ||
+                   pos.y < 0 || pos.y >= max_pos ||
+                   pos.z < 0 || pos.z >= max_pos {
+                    continue
+                }
+
+                if world_at(&self.world, pos)^ == 1 {
+                    // x axis
+                    cols[0][z][y] |= 1 << u64(x)
+                    // y axis
+                    cols[1][z][x] |= 1 << u64(y)
+                    // z axis
+                    cols[2][y][x] |= 1 << u64(z)
+                }
+            }
+        }
+    }
+
+    // Cull Faces
+    for axis in 0..<3 {
+        for i in 0..<CHUNK_SIZE_PADDED {
+            for j in 0..<CHUNK_SIZE_PADDED {
+                col := cols[axis][i][j]
+
+                // sample descending and ascending axis, creating a mask where air meets solid in both directions
+                desc := ~(col << 1)
+                asc  := ~(col >> 1)
+                face_masks[    axis * 2][i][j] = col & desc
+                face_masks[1 + axis * 2][i][j] = col & asc
+            }
+        }
+    }
+    
+    /*
+        Least significant at the start, most significant at the end
+        On x axis:
+            row = z
+            col = y
+            bit = x
+
+        On y axis:
+            row = z
+            col = x
+            bit = y
+
+        On z axis
+            row = y
+            col = x
+            bit = z
+    */
+
+    for axis in 0..<6 {
+        for row in 0..<CHUNK_SIZE {
+            for col in 0..<CHUNK_SIZE {
+                // Get column and remove left and right most padding value
+                col_mask := face_masks[axis][row + 1][col + 1]
+                col_mask >>= 1
+                col_mask &= ~(u64(1) << CHUNK_SIZE)
+
+                for col_mask != 0 {
+                    bit := int(intr.count_trailing_zeros(col_mask))
+        
+                    // Clear least significant bit
+                    col_mask &= col_mask - 1
+                    
+                    pos: int3
+                    switch axis {
+                    case 0, 1: // left/right
+                        pos = int3{bit, col, row}
+                    case 2, 3: // down/up
+                        pos = int3{col, bit, row}
+                    case:      // forward/back
+                        pos = int3{col, row, bit}
+                    }
+
+                    append(quads, Mesher_Quad {
+                        face = Face(axis),
+                        pos = pos + chunk_pos * CHUNK_SIZE,
+                        dimensions = int3_one,
+                    })
+                }
+            }
+        }
+    }
+}
+
 // Rebuilds the voxel mesh for a specific chunk and queues relevant buffers for update for the next frame
 mesher_build_chunk :: proc(self: ^Voxel_State, chunk_pos: int3) {
-    chunk := world_get_chunk(&self.world, chunk_pos)
+    benchmark_start_reading("chunk_mesh") 
+
+    quads := make([dynamic]Mesher_Quad); defer delete(quads)
+    binary_greedy_mesher_generate_quads(self, chunk_pos, &quads)
 
     clear(&self.mesher.vertex_data)
     clear(&self.mesher.index_data)
 
+    faces := [?][]Vertex{
+        CUBE_VERTICES[8:12],  // Left
+        CUBE_VERTICES[12:16], // Right
+        CUBE_VERTICES[20:24], // Bottom
+        CUBE_VERTICES[16:20], // Top
+        CUBE_VERTICES[4:8],   // Back
+        CUBE_VERTICES[0:4],   // Front
+    }
+
+    for quad in quads {
+        base := u32(len(self.mesher.vertex_data))
+        for face_vertex in faces[int(quad.face)] {
+            vertex := face_vertex
+            vertex.position += float3{
+                f32(quad.pos.x),
+                f32(quad.pos.y),
+                f32(quad.pos.z),
+            }
+
+            append(&self.mesher.vertex_data, vertex)
+        }
+
+        append(&self.mesher.index_data,
+            base, base + 1, base + 2,
+            base, base + 2, base + 3,
+        )
+    }
+
+    // Grow buffers if necessary
+    chunk_data := mesher_get_chunk_data(self, chunk_pos)
+
+    vertex_data_size := vk.DeviceSize(len(self.mesher.vertex_data) * size_of(Vertex))
+    if vertex_data_size > chunk_data.vertex_buffer.size {
+        mesher_grow_chunk_data(self, vertex_data_size, chunk_data)
+    }
+
+    buffer_write_mapped_memory(chunk_data.staging_buffer,
+        self.mesher.vertex_data[:],
+    )
+    buffer_write_mapped_memory(chunk_data.staging_buffer,
+        self.mesher.index_data[:],
+        len(self.mesher.vertex_data) * size_of(Vertex),
+    )
+
+    chunk_data.vertex_count = vk.DeviceSize(len(self.mesher.vertex_data))
+    chunk_data.index_count =  vk.DeviceSize(len(self.mesher.index_data))
+
+    benchmark_end_reading("chunk_mesh") 
+
+    /* Unoptimised face culling logic
+    chunk := world_get_chunk(&self.world, chunk_pos)
     // Take slices of vertices for each face
     faces := [?][]Vertex{
         CUBE_VERTICES[0:4],
@@ -235,25 +389,7 @@ mesher_build_chunk :: proc(self: ^Voxel_State, chunk_pos: int3) {
             }
         }
     }
-
-    // Grow buffers if necessary
-    chunk_data := mesher_get_chunk_data(self, chunk_pos)
-
-    vertex_data_size := vk.DeviceSize(len(self.mesher.vertex_data) * size_of(Vertex))
-    if vertex_data_size > chunk_data.vertex_buffer.size {
-        mesher_grow_chunk_data(self, vertex_data_size, chunk_data)
-    }
-
-    buffer_write_mapped_memory(chunk_data.staging_buffer,
-        self.mesher.vertex_data[:],
-    )
-    buffer_write_mapped_memory(chunk_data.staging_buffer,
-        self.mesher.index_data[:],
-        len(self.mesher.vertex_data) * size_of(Vertex),
-    )
-
-    chunk_data.vertex_count = vk.DeviceSize(len(self.mesher.vertex_data))
-    chunk_data.index_count =  vk.DeviceSize(len(self.mesher.index_data))
+    */
 }
 
 mesher_draw :: proc(self: ^Voxel_State, frame: ^Frame_Data, barrier: ^Pipeline_Barrier) {
@@ -261,7 +397,6 @@ mesher_draw :: proc(self: ^Voxel_State, frame: ^Frame_Data, barrier: ^Pipeline_B
     
     // Upload to Gpu buffers after world update
     for chunk_pos, _ in self.world.updates {
-        benchmark_start_reading("chunk_mesh")
         // Rebuild mesh
         mesher_build_chunk(self, chunk_pos)
 
@@ -312,8 +447,6 @@ mesher_draw :: proc(self: ^Voxel_State, frame: ^Frame_Data, barrier: ^Pipeline_B
             data.index_buffer.buffer,
         )
         cmd_pipeline_barrier(cmd, barrier)
-
-        benchmark_end_reading("chunk_mesh")
     }
     clear(&self.world.updates)
 

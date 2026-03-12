@@ -323,10 +323,10 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
             "Mesher",
         }
         im.combo_char("Rendering Method", transmute(^i32)&self.method, raw_data(items[:]), i32(len(items)))
-        im.text("Frame Time: %f s", frame_avg)
-        im.text("Avg Mesh Gen: %f ms", time.duration_milliseconds(
+        im.text("Frame Time: %f ms", frame_avg * 1000)
+        im.text("Avg Mesh Gen: %i us", int(time.duration_microseconds(
             benchmark_get_metric_avg("chunk_mesh"),
-        ))
+        )))
     }; im.end()
     
     im.render()
