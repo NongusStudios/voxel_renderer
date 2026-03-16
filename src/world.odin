@@ -10,17 +10,11 @@ World :: struct {
 create_world :: proc(size: int) -> (self: World) {
     self.size = size
     self.chunks = make([]Chunk, size * size * size)
-    for &chunk in self.chunks {
-        chunk_init(&chunk)
-    }
     self.updates = make(map[int3]u8)
     return
 }
 
 destroy_world :: proc(self: ^World) {
-    for &chunk in self.chunks {
-        destroy_chunk(&chunk)
-    }
     delete(self.chunks)
     delete(self.updates)
 }

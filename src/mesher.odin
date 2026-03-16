@@ -1,6 +1,5 @@
 package main
 
-import "vendor:x11/xlib"
 import "core:log"
 import intr "base:intrinsics"
 import la  "core:math/linalg"
@@ -160,7 +159,7 @@ Face :: enum {
 
 Mesher_Quad :: struct {
     face: Face,
-    pos: int3,
+    position: int3,
     dimensions: int3,
 }
 
@@ -169,7 +168,7 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
     CHUNK_SIZE_PADDED :: CHUNK_SIZE + 2
     
     // Binary representation of voxel data along each axis
-    cols: [3][CHUNK_SIZE_PADDED][CHUNK_SIZE_PADDED]u64
+    voxel_masks: [3][CHUNK_SIZE_PADDED][CHUNK_SIZE_PADDED]u64
 
     // Binary representation of non-culled faces on each axis in both directions
     face_masks: [6][CHUNK_SIZE_PADDED][CHUNK_SIZE_PADDED]u64
@@ -180,6 +179,8 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
             for x in 0..<CHUNK_SIZE_PADDED {
                 // Get world pos
                 pos := (int3{x, y, z} + chunk_pos * CHUNK_SIZE) - int3_one
+
+                // Keep padded bits zero for edge chunks
                 max_pos := self.world.size * CHUNK_SIZE
                 if pos.x < 0 || pos.x >= max_pos ||
                    pos.y < 0 || pos.y >= max_pos ||
@@ -189,11 +190,11 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
 
                 if world_at(&self.world, pos)^ == 1 {
                     // x axis
-                    cols[0][z][y] |= 1 << u64(x)
+                    voxel_masks[0][z][y] |= 1 << u64(x)
                     // y axis
-                    cols[1][z][x] |= 1 << u64(y)
+                    voxel_masks[1][z][x] |= 1 << u64(y)
                     // z axis
-                    cols[2][y][x] |= 1 << u64(z)
+                    voxel_masks[2][y][x] |= 1 << u64(z)
                 }
             }
         }
@@ -201,34 +202,34 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
 
     // Cull Faces
     for axis in 0..<3 {
-        for i in 0..<CHUNK_SIZE_PADDED {
-            for j in 0..<CHUNK_SIZE_PADDED {
-                col := cols[axis][i][j]
+        for row in 0..<CHUNK_SIZE_PADDED {
+            for col in 0..<CHUNK_SIZE_PADDED {
+                voxel_mask := voxel_masks[axis][row][col]
 
                 // sample descending and ascending axis, creating a mask where air meets solid in both directions
-                desc := ~(col << 1)
-                asc  := ~(col >> 1)
-                face_masks[    axis * 2][i][j] = col & desc
-                face_masks[1 + axis * 2][i][j] = col & asc
+                desc := ~(voxel_mask << 1)
+                asc  := ~(voxel_mask >> 1)
+                face_masks[    axis * 2][row][col] = voxel_mask & desc
+                face_masks[1 + axis * 2][row][col] = voxel_mask & asc
             }
         }
     }
     
     /*
-        Least significant at the start, most significant at the end
+        Least significant at the start of chunk, most significant at the end
         On x axis:
-            row = z
-            col = y
             bit = x
+            col = y
+            row = z
 
         On y axis:
-            row = z
             col = x
             bit = y
+            row = z
 
         On z axis
-            row = y
             col = x
+            row = y
             bit = z
     */
 
@@ -236,15 +237,15 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
         for row in 0..<CHUNK_SIZE {
             for col in 0..<CHUNK_SIZE {
                 // Get column and remove left and right most padding value
-                col_mask := face_masks[axis][row + 1][col + 1]
-                col_mask >>= 1
-                col_mask &= ~(u64(1) << CHUNK_SIZE)
+                face_mask := face_masks[axis][row + 1][col + 1]
+                face_mask >>= 1
+                face_mask &= ~(u64(1) << CHUNK_SIZE)
 
-                for col_mask != 0 {
-                    bit := int(intr.count_trailing_zeros(col_mask))
+                for face_mask != 0 {
+                    bit := int(intr.count_trailing_zeros(face_mask))
         
                     // Clear least significant bit
-                    col_mask &= col_mask - 1
+                    face_mask &= face_mask - 1
                     
                     pos: int3
                     switch axis {
@@ -258,7 +259,7 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
 
                     append(quads, Mesher_Quad {
                         face = Face(axis),
-                        pos = pos + chunk_pos * CHUNK_SIZE,
+                        position = pos + chunk_pos * CHUNK_SIZE,
                         dimensions = int3_one,
                     })
                 }
@@ -291,9 +292,9 @@ mesher_build_chunk :: proc(self: ^Voxel_State, chunk_pos: int3) {
         for face_vertex in faces[int(quad.face)] {
             vertex := face_vertex
             vertex.position += float3{
-                f32(quad.pos.x),
-                f32(quad.pos.y),
-                f32(quad.pos.z),
+                f32(quad.position.x),
+                f32(quad.position.y),
+                f32(quad.position.z),
             }
 
             append(&self.mesher.vertex_data, vertex)

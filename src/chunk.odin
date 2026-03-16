@@ -8,16 +8,7 @@ CHUNK_FLAT_SIZE :: CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE
 
 Voxel :: u8
 Chunk :: struct {
-    data:  [CHUNK_FLAT_SIZE]Voxel,
-    solid: map[int3]u8,
-}
-
-chunk_init :: proc(self: ^Chunk) {
-    self.solid = make(map[int3]u8)
-}
-
-destroy_chunk :: proc(self: ^Chunk) {
-    delete(self.solid)
+    data: [CHUNK_FLAT_SIZE]Voxel,
 }
 
 chunk_position_in_bounds :: proc(pos: int3) -> bool {
@@ -38,12 +29,10 @@ chunk_at :: proc(self: ^Chunk, pos: int3) -> ^Voxel {
 chunk_set :: proc(self: ^Chunk, pos: int3) {
     voxel := chunk_at(self, pos)
     voxel^ = 1
-    self.solid[pos] = 1
 }
 
 chunk_unset :: proc(self: ^Chunk, pos: int3) {
     voxel := chunk_at(self, pos)
     if voxel^ == 0 { return }
     voxel^ = 0
-    delete_key(&self.solid, pos)
 }
