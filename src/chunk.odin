@@ -33,6 +33,5 @@ chunk_set :: proc(self: ^Chunk, pos: int3) {
 
 chunk_unset :: proc(self: ^Chunk, pos: int3) {
     voxel := chunk_at(self, pos)
-    if voxel^ == 0 { return }
     voxel^ = 0
 }

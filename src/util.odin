@@ -44,6 +44,8 @@ float3 :: la.Vector3f32
 float4 :: la.Vector4f32
 float4x4 :: la.Matrix4f32
 
+int2 :: [2]int
+
 int32_3 :: [3]i32
 int3 :: [3]int
 
@@ -52,6 +54,14 @@ int3_one :: int3{1, 1, 1}
 
 int3_scalar :: #force_inline proc($N: int) -> int3 {
     return int3{N, N, N}
+}
+
+int3_to_float3 :: #force_inline proc(v: int3) -> float3 {
+    return float3{
+        f32(v.x),
+        f32(v.y),
+        f32(v.z),
+    }
 }
 
 matrix4_perspective_reverse_z_f32 :: proc "contextless" (

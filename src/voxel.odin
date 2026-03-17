@@ -36,6 +36,7 @@ Voxel_State :: struct {
         
         vertex_data: [dynamic]Vertex,
         index_data:  [dynamic]u32,
+        quad_data:   [dynamic]Mesher_Quad,
     },
 
     grid_pipeline: Pipeline,
@@ -60,6 +61,8 @@ Voxel_State :: struct {
         
         remove_min: int32_3,
         remove_max: int32_3,
+        
+        triangle_count: int,
     }
 }
 
@@ -129,7 +132,7 @@ voxel_state_create_pipelines :: proc(self: ^Voxel_State) -> (ok: bool) {
 }
 
 voxel_state_generate_terrain :: proc(self: ^Voxel_State) {
-    seed := time.now()._nsec
+    seed := i64(0b100011100101)
     for z in 0..<WORLD_SIZE*CHUNK_SIZE {
         for x in 0..<WORLD_SIZE*CHUNK_SIZE {
             n := noise.noise_2d_improve_x(seed, {
@@ -327,6 +330,7 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
         im.text("Avg Mesh Gen: %i us", int(time.duration_microseconds(
             benchmark_get_metric_avg("chunk_mesh"),
         )))
+        im.text("Triangle Count: %li", self.gui.triangle_count)
     }; im.end()
     
     im.render()

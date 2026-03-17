@@ -4,10 +4,12 @@ import "core:log"
 import intr "base:intrinsics"
 import la  "core:math/linalg"
 import vk  "vendor:vulkan"
-                                      // size^2               * vertices * faces
-MESHER_VERTEX_BUFFER_INIT_CAPACITY :: CHUNK_SIZE * CHUNK_SIZE * 4        * 6
-                                      // size^2               * indices  * faces
-MESHER_INDEX_BUFFER_INIT_CAPACITY  :: CHUNK_SIZE * CHUNK_SIZE * 6        * 6
+
+MESHER_CHUNK_VOXEL_INIT_CAPACITY :: 448
+                                      // size                          * vertices * faces
+MESHER_VERTEX_BUFFER_INIT_CAPACITY :: MESHER_CHUNK_VOXEL_INIT_CAPACITY * 4        * 6
+                                      // size                          * indices  * faces
+MESHER_INDEX_BUFFER_INIT_CAPACITY  :: MESHER_CHUNK_VOXEL_INIT_CAPACITY * 6        * 6
 
 Mesher_Chunk_Data :: struct {
     vertex_buffer:  Buffer,
@@ -82,9 +84,10 @@ mesher_init_pipelines :: proc(self: ^Voxel_State) -> (ok: bool) {
 
 @(require_results)
 mesher_init :: proc(self: ^Voxel_State) -> (ok: bool) {
-    self.mesher.vertex_data   = make([dynamic]Vertex, 0, MESHER_VERTEX_BUFFER_INIT_CAPACITY)
-    self.mesher.index_data    = make([dynamic]u32,    0, MESHER_INDEX_BUFFER_INIT_CAPACITY)
-    self.mesher.chunk_data = make([]Mesher_Chunk_Data, len(self.world.chunks))
+    self.mesher.vertex_data = make([dynamic]Vertex, 0, MESHER_VERTEX_BUFFER_INIT_CAPACITY)
+    self.mesher.index_data  = make([dynamic]u32,    0, MESHER_INDEX_BUFFER_INIT_CAPACITY)
+    self.mesher.quad_data   = make([dynamic]Mesher_Quad)
+    self.mesher.chunk_data  = make([]Mesher_Chunk_Data, len(self.world.chunks))
     
     mesher_init_chunk_data(self) or_return
     mesher_init_pipelines(self) or_return
@@ -95,6 +98,7 @@ mesher_init :: proc(self: ^Voxel_State) -> (ok: bool) {
 mesher_destroy :: proc(self: ^Voxel_State) {
     delete(self.mesher.vertex_data)
     delete(self.mesher.index_data)
+    delete(self.mesher.quad_data)
     for data in self.mesher.chunk_data {
         destroy_buffer(data.vertex_buffer)
         destroy_buffer(data.index_buffer)
@@ -114,7 +118,7 @@ mesher_grow_chunk_data :: proc(self: ^Voxel_State,
         vertex_next_size += MESHER_VERTEX_BUFFER_INIT_CAPACITY * size_of(Vertex)
         index_next_size  += MESHER_INDEX_BUFFER_INIT_CAPACITY * size_of(u32)
     }
-    
+
     // Wait for current frame to finish before recreating the buffer
     vk.DeviceWaitIdle(get_device())
     destroy_buffer(data.vertex_buffer)
@@ -159,8 +163,8 @@ Face :: enum {
 
 Mesher_Quad :: struct {
     face: Face,
-    position: int3,
-    dimensions: int3,
+    position: float3,
+    extent:   float3,
 }
 
 binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3, quads: ^[dynamic]Mesher_Quad) {
@@ -170,7 +174,7 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
     // Binary representation of voxel data along each axis
     voxel_masks: [3][CHUNK_SIZE_PADDED][CHUNK_SIZE_PADDED]u64
 
-    // Binary representation of non-culled faces on each axis in both directions
+    // Binary representation of faces on each axis in both directions
     face_masks: [6][CHUNK_SIZE_PADDED][CHUNK_SIZE_PADDED]u64
 
     // Create binary mask of voxel data
@@ -214,24 +218,9 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
             }
         }
     }
-    
-    /*
-        Least significant at the start of chunk, most significant at the end
-        On x axis:
-            bit = x
-            col = y
-            row = z
 
-        On y axis:
-            col = x
-            bit = y
-            row = z
-
-        On z axis
-            col = x
-            row = y
-            bit = z
-    */
+    // Construct binary planes
+    planes: [6][CHUNK_SIZE][CHUNK_SIZE]u64
 
     for axis in 0..<6 {
         for row in 0..<CHUNK_SIZE {
@@ -243,27 +232,74 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
 
                 for face_mask != 0 {
                     bit := int(intr.count_trailing_zeros(face_mask))
-        
+                    planes[axis][bit][row] |= 1 << u64(col)
+
                     // Clear least significant bit
                     face_mask &= face_mask - 1
-                    
-                    pos: int3
-                    switch axis {
-                    case 0, 1: // left/right
-                        pos = int3{bit, col, row}
-                    case 2, 3: // down/up
-                        pos = int3{col, bit, row}
-                    case:      // forward/back
-                        pos = int3{col, row, bit}
-                    }
-
-                    append(quads, Mesher_Quad {
-                        face = Face(axis),
-                        position = pos + chunk_pos * CHUNK_SIZE,
-                        dimensions = int3_one,
-                    })
                 }
             }
+        }
+    }
+
+    mesh_binary_plane :: proc(plane: ^[CHUNK_SIZE]u64, quads: ^[dynamic]Mesher_Quad, axis: int, plane_pos: int, chunk_pos: int3) {
+        for row in 0..<CHUNK_SIZE {
+            bit := u64(0)
+            for bit < CHUNK_SIZE {
+                bit += intr.count_trailing_zeros(plane[row] >> bit)
+                if bit >= CHUNK_SIZE { continue }
+
+                // Get the height of the face by counting trailing ones
+                height := intr.count_trailing_zeros(~(plane[row] >> bit))
+                
+                // Convert height number into repeated positive bits 
+                height_mask: u64 = (1 << height) - 1
+
+                // Position repeated height bits inline with the current face position
+                mask := height_mask << bit
+
+                // Grow horizontally
+                width := 1
+                for row + width < CHUNK_SIZE {
+                    // Get bits spanning height in the next row
+                    next_row := (plane[row + width] >> bit) & height_mask
+                    if next_row != height_mask {
+                        break // Face can no longer be expanded horizontally
+                    }
+
+                    // Zero bits that were expanded into
+                    plane[row + width] = plane[row + width] &~ mask
+                    width += 1
+                }
+
+                quad := Mesher_Quad {
+                    face = Face(axis)
+                }
+                switch axis {
+                case 0, 1: // X
+                    quad.position = int3_to_float3({plane_pos, int(bit),    row})
+                    quad.extent   = int3_to_float3({1,         int(height), width})
+                case 2, 3: // aY
+                    quad.position = int3_to_float3({int(bit),    plane_pos, row})
+                    quad.extent   = int3_to_float3({int(height), 1,         width})
+                case 4, 5: // Z
+                    quad.position = int3_to_float3({int(bit),    row,   plane_pos})
+                    quad.extent   = int3_to_float3({int(height), width, 1})
+                }
+
+                quad.position += quad.extent * 0.5 - 0.5
+                quad.position += int3_to_float3(chunk_pos * CHUNK_SIZE)
+
+                append(quads, quad)
+
+                bit += height
+            }
+        }
+    }
+
+    // Mesh binary planes
+    for axis in 0..<6 {
+        for plane_pos in 0..<CHUNK_SIZE {
+            mesh_binary_plane(&planes[axis][plane_pos], quads, axis, plane_pos, chunk_pos)
         }
     }
 }
@@ -272,42 +308,45 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
 mesher_build_chunk :: proc(self: ^Voxel_State, chunk_pos: int3) {
     benchmark_start_reading("chunk_mesh") 
 
-    quads := make([dynamic]Mesher_Quad); defer delete(quads)
-    binary_greedy_mesher_generate_quads(self, chunk_pos, &quads)
-
+    clear(&self.mesher.quad_data)
     clear(&self.mesher.vertex_data)
     clear(&self.mesher.index_data)
 
-    faces := [?][]Vertex{
-        CUBE_VERTICES[8:12],  // Left
-        CUBE_VERTICES[12:16], // Right
-        CUBE_VERTICES[20:24], // Bottom
-        CUBE_VERTICES[16:20], // Top
-        CUBE_VERTICES[4:8],   // Back
-        CUBE_VERTICES[0:4],   // Front
+    binary_greedy_mesher_generate_quads(self, chunk_pos, &self.mesher.quad_data)
+
+    face_vertices := [Face][]Vertex {
+        .Left   = CUBE_VERTICES[8:12],
+        .Right  = CUBE_VERTICES[12:16],
+        .Bottom = CUBE_VERTICES[20:24],
+        .Top    = CUBE_VERTICES[16:20],
+        .Back   = CUBE_VERTICES[4:8],
+        .Front  = CUBE_VERTICES[0:4],
     }
 
-    for quad in quads {
-        base := u32(len(self.mesher.vertex_data))
-        for face_vertex in faces[int(quad.face)] {
-            vertex := face_vertex
-            vertex.position += float3{
-                f32(quad.position.x),
-                f32(quad.position.y),
-                f32(quad.position.z),
-            }
+    for quad in self.mesher.quad_data {
+        base_vertex := u32(len(self.mesher.vertex_data)) 
 
-            append(&self.mesher.vertex_data, vertex)
+        for vertex in face_vertices[quad.face] {
+            vert := vertex
+            vert.position *= quad.extent
+            vert.position += quad.position
+            append(&self.mesher.vertex_data, vert)
         }
 
         append(&self.mesher.index_data,
-            base, base + 1, base + 2,
-            base, base + 2, base + 3,
+            base_vertex, base_vertex + 1, base_vertex + 2,
+            base_vertex, base_vertex + 2, base_vertex + 3,
         )
     }
 
+    benchmark_end_reading("chunk_mesh") 
+
     // Grow buffers if necessary
     chunk_data := mesher_get_chunk_data(self, chunk_pos)
+
+    // Record triangle count
+    self.gui.triangle_count -= int(chunk_data.index_count) / 3
+    self.gui.triangle_count += len(self.mesher.index_data) / 3
 
     vertex_data_size := vk.DeviceSize(len(self.mesher.vertex_data) * size_of(Vertex))
     if vertex_data_size > chunk_data.vertex_buffer.size {
@@ -324,8 +363,6 @@ mesher_build_chunk :: proc(self: ^Voxel_State, chunk_pos: int3) {
 
     chunk_data.vertex_count = vk.DeviceSize(len(self.mesher.vertex_data))
     chunk_data.index_count =  vk.DeviceSize(len(self.mesher.index_data))
-
-    benchmark_end_reading("chunk_mesh") 
 
     /* Unoptimised face culling logic
     chunk := world_get_chunk(&self.world, chunk_pos)
