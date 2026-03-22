@@ -301,18 +301,18 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
         }
 
         if im.begin_menu("Remove") {
-            im.input_int3("remove::min", &self.gui.remove_min)
-            im.input_int3("remove::max", &self.gui.remove_max)
+            im.input_int3("remove::start", &self.gui.remove_min)
+            im.input_int3("remove::extent", &self.gui.remove_max)
             if im.button("remove") {
-                for z in self.gui.remove_min.z..<self.gui.remove_max.z {
-                    for y in self.gui.remove_min.y..<self.gui.remove_max.y {
-                        for x in self.gui.remove_min.x..<self.gui.remove_max.x {
+                for z in self.gui.remove_min.z..<self.gui.remove_max.z+self.gui.remove_min.z {
+                    for y in self.gui.remove_min.y..<self.gui.remove_max.y+self.gui.remove_min.y {
+                        for x in self.gui.remove_min.x..<self.gui.remove_max.x+self.gui.remove_min.x {
                             p := int3{
                                 int(x),
                                 int(y),
                                 int(z),
                             }
-                            if !chunk_position_in_bounds(p) { continue }
+                            if !world_position_in_bounds(&self.world, p) { continue }
                             world_unset(&self.world, p)
                         }
                     }

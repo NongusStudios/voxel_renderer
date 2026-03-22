@@ -211,10 +211,8 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
                 voxel_mask := voxel_masks[axis][row][col]
 
                 // sample descending and ascending axis, creating a mask where air meets solid in both directions
-                desc := ~(voxel_mask << 1)
-                asc  := ~(voxel_mask >> 1)
-                face_masks[    axis * 2][row][col] = voxel_mask & desc
-                face_masks[1 + axis * 2][row][col] = voxel_mask & asc
+                face_masks[    axis * 2][row][col] = voxel_mask & ~(voxel_mask << 1)
+                face_masks[1 + axis * 2][row][col] = voxel_mask & ~(voxel_mask >> 1)
             }
         }
     }
@@ -243,31 +241,31 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
 
     mesh_binary_plane :: proc(plane: ^[CHUNK_SIZE]u64, quads: ^[dynamic]Mesher_Quad, axis: int, plane_pos: int, chunk_pos: int3) {
         for row in 0..<CHUNK_SIZE {
-            bit := u64(0)
-            for bit < CHUNK_SIZE {
-                bit += intr.count_trailing_zeros(plane[row] >> bit)
-                if bit >= CHUNK_SIZE { continue }
+            for {
+                bit := intr.count_trailing_zeros(plane[row])
+                if bit >= CHUNK_SIZE { break }
 
                 // Get the height of the face by counting trailing ones
                 height := intr.count_trailing_zeros(~(plane[row] >> bit))
                 
-                // Convert height number into repeated positive bits 
+                // Convert height number into repeated positive bits aligned with mask
                 height_mask: u64 = (1 << height) - 1
+                height_mask = height_mask << bit
 
-                // Position repeated height bits inline with the current face position
-                mask := height_mask << bit
+                // Zero bits expanded into in the current column
+                plane[row] = plane[row] &~ height_mask
 
                 // Grow horizontally
                 width := 1
                 for row + width < CHUNK_SIZE {
                     // Get bits spanning height in the next row
-                    next_row := (plane[row + width] >> bit) & height_mask
+                    next_row := plane[row + width] & height_mask
                     if next_row != height_mask {
                         break // Face can no longer be expanded horizontally
                     }
 
                     // Zero bits that were expanded into
-                    plane[row + width] = plane[row + width] &~ mask
+                    plane[row + width] = plane[row + width] &~ height_mask
                     width += 1
                 }
 
@@ -286,6 +284,7 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
                     quad.extent   = int3_to_float3({int(height), width, 1})
                 }
 
+                // Transform quad position for faces with centred origins
                 quad.position += quad.extent * 0.5 - 0.5
                 quad.position += int3_to_float3(chunk_pos * CHUNK_SIZE)
 

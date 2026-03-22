@@ -19,6 +19,33 @@ destroy_world :: proc(self: ^World) {
     delete(self.updates)
 }
 
+world_queue_update :: proc(self: ^World, chunk: int3, pos: int3) {
+    self.updates[chunk] = 1
+    
+    // no further updates required if voxel doesn't border the chunk
+    if pos.x > 0 && pos.y > 0 && pos.z > 0 &&
+       pos.x < CHUNK_SIZE-1 && pos.y < CHUNK_SIZE-1 && pos.z < CHUNK_SIZE-1 {
+        return
+    }
+    
+    // Queue affected neighbours on change of a bordering voxel
+    for axis in 0..<3 {
+        diff := int3_zero
+        diff[axis] = 1
+
+        // Check negative borders
+        if pos[axis] == 0 && chunk[axis] > 0 {    
+            self.updates[chunk - diff] = 1
+            continue
+        }
+
+        // Check positive borders
+        if pos[axis] == CHUNK_SIZE-1 && chunk[axis] < self.size-1 {
+            self.updates[chunk + diff] = 1
+        }
+    }
+}
+
 world_translate_coords :: proc(world_pos: int3) -> (chunk: int3, pos: int3) { 
     chunk = world_pos / CHUNK_SIZE
     pos   = world_pos % CHUNK_SIZE
@@ -50,8 +77,8 @@ world_set :: proc(self: ^World, world_pos: int3) {
 
     chunk, pos := world_translate_coords(world_pos)
     chunk_set(world_get_chunk(self, chunk), pos)
-
-    self.updates[chunk] = 1
+    
+    world_queue_update(self, chunk, pos)
 }
 
 world_unset :: proc(self: ^World, world_pos: int3) {
@@ -59,7 +86,7 @@ world_unset :: proc(self: ^World, world_pos: int3) {
     chunk, pos := world_translate_coords(world_pos)
     chunk_unset(world_get_chunk(self, chunk), pos)
 
-    self.updates[chunk] = 1
+    world_queue_update(self, chunk, pos)
 }
 
 world_add_cube :: proc(self: ^World, origin: int3, dimensions: int3) {

@@ -1,3 +1,3 @@
-# Odin Vulkan Template
+# Voxel Rendering Tutorial
 
-Template for vulkan projects written in odin with sdl3, also sporting some simple abstractions over objects.
+This repository holds the source code for my written voxel rendering tutorial, covering the basics of meshing and ray-traversal.
