@@ -276,7 +276,7 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
                 case 0, 1: // X
                     quad.position = int3_to_float3({plane_pos, int(bit),    row})
                     quad.extent   = int3_to_float3({1,         int(height), width})
-                case 2, 3: // aY
+                case 2, 3: // Y
                     quad.position = int3_to_float3({int(bit),    plane_pos, row})
                     quad.extent   = int3_to_float3({int(height), 1,         width})
                 case 4, 5: // Z
@@ -289,8 +289,6 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
                 quad.position += int3_to_float3(chunk_pos * CHUNK_SIZE)
 
                 append(quads, quad)
-
-                bit += height
             }
         }
     }
@@ -487,7 +485,7 @@ mesher_draw :: proc(self: ^Voxel_State, frame: ^Frame_Data, barrier: ^Pipeline_B
     }
     clear(&self.world.updates)
 
-    voxel_state_begin_rendering(self, cmd, barrier)
+    mesher_begin_rendering(self, cmd, barrier)
     view_proj := self.matrices.projection * self.matrices.view
  
     /* draw world chunks */
@@ -523,4 +521,110 @@ mesher_draw :: proc(self: ^Voxel_State, frame: ^Frame_Data, barrier: ^Pipeline_B
     voxel_state_draw_grid(self, cmd, view_proj) 
 
     vk.CmdEndRendering(cmd)
+    mesher_present_frame(self, frame, barrier)
+}
+
+mesher_begin_rendering :: proc(self: ^Voxel_State,
+    cmd: vk.CommandBuffer,
+    barrier: ^Pipeline_Barrier,
+) {
+    pipeline_barrier_add_image_barrier(barrier,
+        {.ALL_COMMANDS}, {},
+        {.ALL_GRAPHICS}, {.COLOR_ATTACHMENT_READ, .COLOR_ATTACHMENT_WRITE},
+        .UNDEFINED,
+        .COLOR_ATTACHMENT_OPTIMAL,
+        self.color_attachment.image,
+        image_subresource_range({.COLOR}),
+    )
+    cmd_pipeline_barrier(cmd, barrier)
+
+    color_clear := vk.ClearValue {
+        color = {
+            float32 = {0., 0., 0., 1.0},
+        }
+    }
+    
+    depth_clear := vk.ClearValue {
+        depthStencil = {
+            depth = 0.0,
+        }
+    }
+
+    color_attachment := attachment_info(
+        self.color_attachment.view,
+        &color_clear,
+        .COLOR_ATTACHMENT_OPTIMAL,
+    )
+
+    depth_attachment := attachment_info(
+        self.depth_attachment.view,
+        &depth_clear,
+        .DEPTH_ATTACHMENT_OPTIMAL,
+    )
+
+    render_info := rendering_info(self.viewport_extent,
+        &color_attachment,
+        &depth_attachment
+    )
+
+    vk.CmdBeginRendering(cmd, &render_info)
+
+    viewport := vk.Viewport {
+        x = 0,
+        y = 0,
+        width =  f32(self.viewport_extent.width),
+        height = f32(self.viewport_extent.height),
+        minDepth = 0.0,
+        maxDepth = 1.0,
+    }
+
+    scissor := vk.Rect2D {
+        extent = self.viewport_extent,
+    }
+
+    vk.CmdSetViewport(cmd, 0, 1, &viewport)
+    vk.CmdSetScissor(cmd,  0, 1, &scissor)
+}
+
+mesher_present_frame :: proc(self: ^Voxel_State,
+    frame: ^Frame_Data,
+    barrier: ^Pipeline_Barrier,
+) {
+    cmd := frame.command_buffer
+    swapchain_image := get_swapchain().images[frame.image_index]
+
+
+    subresource := image_subresource_range({.COLOR})
+    pipeline_barrier_add_image_barrier(barrier,
+        {.ALL_GRAPHICS}, {.COLOR_ATTACHMENT_READ, .COLOR_ATTACHMENT_WRITE},
+        {.COPY}, {.TRANSFER_READ},
+        .COLOR_ATTACHMENT_OPTIMAL,
+        .TRANSFER_SRC_OPTIMAL,
+        self.color_attachment.image,
+        subresource,
+    )
+
+    pipeline_barrier_add_image_barrier(barrier,
+        {.ALL_COMMANDS}, {},
+        {.COPY}, {.TRANSFER_WRITE},
+        .UNDEFINED,
+        .TRANSFER_DST_OPTIMAL,
+        swapchain_image,
+        subresource,
+    )
+
+    cmd_pipeline_barrier(cmd, barrier)
+
+    layers := image_subresource_layers({.COLOR})
+    cmd_copy_image(cmd,
+        self.color_attachment.image,
+        swapchain_image,
+        self.viewport_extent,
+        get_swapchain().extent,
+        layers, layers,
+    )
+
+    draw_imgui_and_present_frame(frame,
+            {.COPY}, {.TRANSFER_WRITE},
+            .TRANSFER_DST_OPTIMAL)
 }

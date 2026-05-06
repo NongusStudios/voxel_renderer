@@ -11,12 +11,13 @@ import vk  "vendor:vulkan"
 import im "../lib/imgui"
 
 VOXEL_COLOR :: float4 {0.3, 1.0, 0.4, 1.0}
+VOXEL_UNIT_SIZE :: 2
 WORLD_SIZE  :: 16
 
 Render_Method :: enum i32 {
     Mesher,
-    Mesher_Gpu,
     Ray_Traversal,
+    Mesher_Gpu,
 }
 
 Voxel_State :: struct {
@@ -37,6 +38,14 @@ Voxel_State :: struct {
         vertex_data: [dynamic]Vertex,
         index_data:  [dynamic]u32,
         quad_data:   [dynamic]Mesher_Quad,
+    },
+
+    ray: struct {
+        pipeline: Pipeline,
+        descriptor_group: Descriptor_Group,
+        descriptor_layout: vk.DescriptorSetLayout,
+        descriptor_set: vk.DescriptorSet,
+        voxel_buffer: Buffer,
     },
 
     grid_pipeline: Pipeline,
@@ -75,7 +84,8 @@ voxel_state_init_viewport :: proc(self: ^Voxel_State) -> (ok: bool) {
         extent.width, 
         extent.height,
     )
-    image_builder_set_usage(&builder, {.COLOR_ATTACHMENT, .TRANSFER_SRC})
+    image_builder_set_usage(&builder,
+        {.COLOR_ATTACHMENT, .TRANSFER_SRC, .TRANSFER_DST, .STORAGE})
     self.color_attachment = image_builder_build(&builder,
         allocation_info(.Gpu_Only),
     ) or_return
@@ -162,6 +172,7 @@ create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
     voxel_state_create_pipelines(&self) or_return
 
     mesher_init(&self) or_return
+    ray_init(&self) or_return
 
     onetime_tracker := create_resource_tracker(); defer destroy_resource_tracker(&onetime_tracker)
     cmd := start_one_time_commands() or_return
@@ -185,7 +196,7 @@ create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
     self.camera.position = float3{0, CHUNK_SIZE * 2 + 5, 0}
     self.matrices.view = camera_view_matrix(&self.camera)
  
-    self.matrices.model = la.matrix4_scale(float3{2.0, 2.0, 2.0})
+    self.matrices.model = la.matrix4_scale(float3{VOXEL_UNIT_SIZE, VOXEL_UNIT_SIZE, VOXEL_UNIT_SIZE})
     self.matrices.model *= la.matrix4_translate(float3{
         -(WORLD_SIZE * CHUNK_SIZE) / 2.0,
         0,
@@ -324,6 +335,7 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
 
         items := []cstring {
             "Mesher",
+            "Ray_Traversal"
         }
         im.combo_char("Rendering Method", transmute(^i32)&self.method, raw_data(items[:]), i32(len(items)))
         im.text("Frame Time: %f ms", frame_avg * 1000)
@@ -372,113 +384,8 @@ voxel_state_draw :: proc(self: ^Voxel_State) {
         vk.CmdSetPolygonModeEXT(frame.command_buffer, .LINE if self.gui.wireframe else .FILL)
 
         #partial switch self.method {
-        case .Mesher:       mesher_draw(self, frame, &barrier)
+        case .Mesher:        mesher_draw(self, frame, &barrier)
+        case .Ray_Traversal: ray_draw(self, frame, &barrier)
         } 
-        voxel_state_present_frame(self, frame, &barrier)
     }
-}
-
-voxel_state_begin_rendering :: proc(self: ^Voxel_State,
-    cmd: vk.CommandBuffer,
-    barrier: ^Pipeline_Barrier,
-) {
-    pipeline_barrier_add_image_barrier(barrier,
-        {.ALL_COMMANDS}, {},
-        {.ALL_GRAPHICS}, {.COLOR_ATTACHMENT_READ, .COLOR_ATTACHMENT_WRITE},
-        .UNDEFINED,
-        .COLOR_ATTACHMENT_OPTIMAL,
-        self.color_attachment.image,
-        image_subresource_range({.COLOR}),
-    )
-    cmd_pipeline_barrier(cmd, barrier)
-
-    color_clear := vk.ClearValue {
-        color = {
-            float32 = {0., 0., 0., 1.0},
-        }
-    }
-    
-    depth_clear := vk.ClearValue {
-        depthStencil = {
-            depth = 0.0,
-        }
-    }
-
-    color_attachment := attachment_info(
-        self.color_attachment.view,
-        &color_clear,
-        .COLOR_ATTACHMENT_OPTIMAL,
-    )
-
-    depth_attachment := attachment_info(
-        self.depth_attachment.view,
-        &depth_clear,
-        .DEPTH_ATTACHMENT_OPTIMAL,
-    )
-
-    render_info := rendering_info(self.viewport_extent,
-        &color_attachment,
-        &depth_attachment
-    )
-
-    vk.CmdBeginRendering(cmd, &render_info)
-
-    viewport := vk.Viewport {
-        x = 0,
-        y = 0,
-        width =  f32(self.viewport_extent.width),
-        height = f32(self.viewport_extent.height),
-        minDepth = 0.0,
-        maxDepth = 1.0,
-    }
-
-    scissor := vk.Rect2D {
-        extent = self.viewport_extent,
-    }
-
-    vk.CmdSetViewport(cmd, 0, 1, &viewport)
-    vk.CmdSetScissor(cmd,  0, 1, &scissor)
-}
-
-voxel_state_present_frame :: proc(self: ^Voxel_State,
-    frame: ^Frame_Data,
-    barrier: ^Pipeline_Barrier,
-) {
-    cmd := frame.command_buffer
-    swapchain_image := get_swapchain().images[frame.image_index]
-
-
-    subresource := image_subresource_range({.COLOR})
-    pipeline_barrier_add_image_barrier(barrier,
-        {.ALL_GRAPHICS}, {.COLOR_ATTACHMENT_READ, .COLOR_ATTACHMENT_WRITE},
-        {.COPY}, {.TRANSFER_READ},
-        .COLOR_ATTACHMENT_OPTIMAL,
-        .TRANSFER_SRC_OPTIMAL,
-        self.color_attachment.image,
-        subresource,
-    )
-
-    pipeline_barrier_add_image_barrier(barrier,
-        {.ALL_COMMANDS}, {},
-        {.COPY}, {.TRANSFER_WRITE},
-        .UNDEFINED,
-        .TRANSFER_DST_OPTIMAL,
-        swapchain_image,
-        subresource,
-    )
-
-    cmd_pipeline_barrier(cmd, barrier)
-
-    layers := image_subresource_layers({.COLOR})
-    cmd_copy_image(cmd,
-        self.color_attachment.image,
-        swapchain_image,
-        self.viewport_extent,
-        get_swapchain().extent,
-        layers, layers,
-    )
-
-    draw_imgui_and_present_frame(frame,
-            {.COPY}, {.TRANSFER_WRITE},
-            .TRANSFER_DST_OPTIMAL)
 }

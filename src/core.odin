@@ -68,8 +68,6 @@ destroy_buffer :: proc(self: Buffer) {
 buffer_write_mapped_memory :: proc(self: Buffer, data: []$T, offset: int = 0) {
     assert(self.size >= vk.DeviceSize(len(data) * size_of(T) + offset))
 
-    state := get_vk_state()
-
     mapped_memory: rawptr = self.allocation_info.mapped_data
     
     if offset > 0 {
@@ -398,6 +396,7 @@ descriptor_group_builder_add_binding :: proc(self: ^Descriptor_Group_Builder,
     self.pool_sizes[type] += count
 }
 
+// Builds the descriptor groups layouts, pool, and allocates sets
 descriptor_group_builder_build :: proc(self: ^Descriptor_Group_Builder, pool_flags: vk.DescriptorPoolCreateFlags = {}) -> (group: Descriptor_Group, ok: bool) {
     group = Descriptor_Group {
         sets = make([]vk.DescriptorSet, self.max_sets),
