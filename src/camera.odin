@@ -36,7 +36,7 @@ camera_right_vector :: proc(self: ^Camera) -> float3 {
     }
 }
 
-camera_input :: proc(self: ^Camera, event: sdl.Event) {
+camera_input :: proc(self: ^Camera, event: ^sdl.Event) {
     if get_app().mouse_captured && event.type == .MOUSE_MOTION {
         sensitivity: f32 = 0.005
         self.yaw   -= event.motion.xrel * sensitivity

@@ -62,6 +62,8 @@ Voxel_State :: struct {
         wireframe: bool,
         grid: bool,
 
+        place_radius: i32,
+
         sphere_origin: int32_3,
         sphere_radius: i32,
 
@@ -162,6 +164,7 @@ voxel_state_generate_terrain :: proc(self: ^Voxel_State) {
 create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
     self.method = .Mesher
     self.world = create_world(WORLD_SIZE)
+    self.gui.place_radius = 2
     
     benchmark_start_reading("terrain_gen")
     voxel_state_generate_terrain(&self)    
@@ -193,13 +196,13 @@ create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
     // Setup projection, view and model matrices
     self.matrices.projection = get_projection_matrix()
 
-    self.camera.position = float3{0, CHUNK_SIZE * 2 + 5, 0}
+    self.camera.position = float3{0, -(WORLD_SIZE * CHUNK_SIZE) * 0.6, 0}
     self.matrices.view = camera_view_matrix(&self.camera)
  
     self.matrices.model = la.matrix4_scale(float3{VOXEL_UNIT_SIZE, VOXEL_UNIT_SIZE, VOXEL_UNIT_SIZE})
     self.matrices.model *= la.matrix4_translate(float3{
         -(WORLD_SIZE * CHUNK_SIZE) / 2.0,
-        0,
+        -(WORLD_SIZE * CHUNK_SIZE) / 2.0,
         -(WORLD_SIZE * CHUNK_SIZE) / 2.0,
     }) 
 
@@ -211,6 +214,7 @@ destroy_voxel_state :: proc(self: ^Voxel_State) {
 
     vk.DeviceWaitIdle(get_device())
     mesher_destroy(self)
+    ray_destroy(self)
 }
 
 get_projection_matrix :: proc(fov: f32 = 80.0) -> float4x4 {
@@ -220,7 +224,7 @@ get_projection_matrix :: proc(fov: f32 = 80.0) -> float4x4 {
     return matrix4_perspective_reverse_z_f32(la.to_radians(fov), aspect, 0.1)
 }
 
-voxel_state_event :: proc(self: ^Voxel_State, event: sdl.Event) {
+voxel_state_event :: proc(self: ^Voxel_State, event: ^sdl.Event) {
     #partial switch event.type {
     case .WINDOW_RESIZED:
         self.viewport_extent = get_window_extent()
@@ -240,7 +244,30 @@ voxel_state_event :: proc(self: ^Voxel_State, event: sdl.Event) {
 }
 
 voxel_state_update :: proc(self: ^Voxel_State, dt: f32) {
+    PLACE_COOLDOWN :: 0.1
+    @(static)
+    dt_accumulator: f32 = 0.0
+    dt_accumulator += dt
+
     camera_update(&self.camera, dt)
+
+    mouse := sdl.GetMouseState(nil, nil)
+    
+    if dt_accumulator >= PLACE_COOLDOWN && get_app().mouse_captured {
+        if .LEFT in mouse {
+            pos, _, hit := world_cast_ray(&self.world, self.camera.position, camera_target_vector(&self.camera))
+            if hit {
+                world_sphere(&self.world, pos, int(self.gui.place_radius), false)
+            }
+        } else if .RIGHT in mouse {
+            pos, norm, hit := world_cast_ray(&self.world, self.camera.position, camera_target_vector(&self.camera))
+            if hit {
+                world_sphere(&self.world, pos + norm * int(self.gui.place_radius), int(self.gui.place_radius))
+            }
+        }
+
+        dt_accumulator = 0.0
+    }
 }
 
 voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
@@ -271,6 +298,7 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
     if im.begin("Debug", nil, {.Always_Auto_Resize}) { 
         im.checkbox("Wireframe", &self.gui.wireframe)
         im.checkbox("Draw Grid", &self.gui.grid)
+        im.slider_int("Place Radius", &self.gui.place_radius, 1, 50)
     
         if im.begin_menu("Place") {
             im.text("Sphere:")
@@ -284,7 +312,7 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
                     int(o.y),
                     int(o.z)
                 }
-                world_add_sphere(&self.world, oi, int(self.gui.sphere_radius))
+                world_sphere(&self.world, oi, int(self.gui.sphere_radius))
             }
 
             im.text("Cube:")
@@ -305,7 +333,7 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
                     int(d.z),
                 }
 
-                world_add_cube(&self.world, oi, di)
+                world_cube(&self.world, oi, di)
             }
 
             im.end_menu()
@@ -315,20 +343,15 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
             im.input_int3("remove::start", &self.gui.remove_min)
             im.input_int3("remove::extent", &self.gui.remove_max)
             if im.button("remove") {
-                for z in self.gui.remove_min.z..<self.gui.remove_max.z+self.gui.remove_min.z {
-                    for y in self.gui.remove_min.y..<self.gui.remove_max.y+self.gui.remove_min.y {
-                        for x in self.gui.remove_min.x..<self.gui.remove_max.x+self.gui.remove_min.x {
-                            p := int3{
-                                int(x),
-                                int(y),
-                                int(z),
-                            }
-                            if !world_position_in_bounds(&self.world, p) { continue }
-                            world_unset(&self.world, p)
-                        }
-                    }
-                }
-                
+                world_cube(&self.world, int3{
+                    int(self.gui.remove_min.x),
+                    int(self.gui.remove_min.y),
+                    int(self.gui.remove_min.z),
+                }, int3{
+                    int(self.gui.remove_max.x),
+                    int(self.gui.remove_max.y),
+                    int(self.gui.remove_max.z),
+                }, false)
             }
             im.end_menu()
         }

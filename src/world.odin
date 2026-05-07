@@ -89,7 +89,7 @@ world_unset :: proc(self: ^World, world_pos: int3) {
     world_queue_update(self, chunk, pos)
 }
 
-world_add_cube :: proc(self: ^World, origin: int3, dimensions: int3) {
+world_cube :: proc(self: ^World, origin: int3, dimensions: int3, place := true) {
     minx := origin.x
     maxx := origin.x + dimensions.x
 
@@ -104,13 +104,17 @@ world_add_cube :: proc(self: ^World, origin: int3, dimensions: int3) {
         for y in miny..<maxy {
             for x in minx..<maxx {
                 if !world_position_in_bounds(self, {x, y, z}) { continue }
-                world_set(self, {x, y, z})
+                if place {
+                    world_set(self, {x, y, z})
+                } else {
+                    world_unset(self, {x, y, z})
+                }
             }
         }
     }
 }
 
-world_add_sphere :: proc(self: ^World, origin: int3, r: int) {
+world_sphere :: proc(self: ^World, origin: int3, r: int, place := true) {
     minx := origin.x - r
     maxx := origin.x + r
 
@@ -136,9 +140,108 @@ world_add_sphere :: proc(self: ^World, origin: int3, r: int) {
                 d := math.sqrt(dx + dy + dz)
 
                 if d < f32(r) {
-                    world_set(self, {x, y, z})
+                    if place {
+                        world_set(self,   {x, y, z})
+                    } else {
+                        world_unset(self, {x, y, z})
+                    }
                 }
             }
         }
     }
+}
+
+world_to_grid_local_position :: proc(position: float3, world_size: int) -> float3 {
+    size := f32(world_size * CHUNK_SIZE) / 2
+    return position / VOXEL_UNIT_SIZE + size
+}
+
+world_cast_ray :: proc(self: ^World, origin: float3, direction: float3) -> (pos: int3, normal: int3, hit: bool) {
+    /* Initialisation */
+    grid_origin := world_to_grid_local_position(origin, self.size)
+    grid_max_bounds := self.size * CHUNK_SIZE
+
+    start_index := int3{
+        int(math.floor(grid_origin.x)),
+        int(math.floor(grid_origin.y)),
+        int(math.floor(grid_origin.z)),
+    }
+    current_index := start_index
+
+    // Step
+    get_step :: proc(dir: f32) -> int {
+        if dir > 0 {
+            return  1
+        } else if dir < 0 {
+            return -1
+        }
+        return 0
+    }
+
+    // t_max
+    get_t_max :: proc(dir: f32, current: int, org: f32) -> f32 {
+        cur: int
+        if dir > 0 {
+            cur = current + 1
+        } else if dir < 0 {
+            cur = current - 1
+        } else {
+            return math.INF_F32
+        }
+
+        return (f32(cur) - org) / dir
+    }
+    
+    step: int3
+    t_delta, t_max: float3
+
+    for a in 0..<3 {
+        step[a]    = get_step(direction[a])
+        t_delta[a] = abs(1 / direction[a]) if direction[a] != 0 else math.INF_F32
+        
+        /* NOTE not accounted for:
+            tMin - Calculated during the initialization phase, this determines the minimum time needed to cross into the grid.
+            This would be added to tMaxX in the initialization phase.
+        */
+        //t_max[a] = get_t_max(direction[a], current_index[a], grid_origin[a])
+        t_max[a] = (f32(start_index[a]) - grid_origin[a]) / direction[a]
+    }
+
+    /* Traversal */
+    for {
+        // Keeps track of the traversal direction
+        traversal : int3
+
+        // Find smallest t_max
+        if t_max.x < t_max.y && t_max.x < t_max.z {
+            // Move in X
+            current_index.x += step.x
+            t_max.x += t_delta.x
+            traversal.x = step.x
+        } else if t_max.y < t_max.z {
+            // Move in Y
+            current_index.y += step.y
+            t_max.y += t_delta.y
+            traversal.y = step.y
+        } else {
+            // Move in Z
+            current_index.z += step.z
+            t_max.z += t_delta.z
+            traversal.z = step.z
+        }
+
+        if  current_index.x < 0 || current_index.x >= grid_max_bounds ||
+            current_index.y < 0 || current_index.y >= grid_max_bounds ||
+            current_index.z < 0 || current_index.z >= grid_max_bounds
+        {
+            break
+        }
+
+        // Check if current voxel is solid
+        if world_at(self, current_index)^ > 0 {
+            return current_index, -traversal, true
+        }
+    }
+
+    return {}, {}, false
 }

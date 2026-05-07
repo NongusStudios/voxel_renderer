@@ -7,6 +7,7 @@ import vk  "vendor:vulkan"
 WIDTH  :: 1600
 HEIGHT :: 900
 TITLE  : cstring : "voxel_renderer"
+WINDOW_FLAGS : sdl.WindowFlags : {}
 
 App :: struct {
     window:   ^sdl.Window,
@@ -59,7 +60,7 @@ init_app :: proc() -> (ok: bool) {
         return false
     }
 
-    self.window = sdl.CreateWindow(TITLE, WIDTH, HEIGHT, {.VULKAN})
+    self.window = sdl.CreateWindow(TITLE, WIDTH, HEIGHT, {.VULKAN} + WINDOW_FLAGS)
     if self.window == nil {
         log.errorf("failed to create a window:\n%s", sdl.GetError())
         return false
@@ -96,7 +97,11 @@ app_handle_resize :: proc() {
     resize_swapchain()
 }
 
-app_handle_event :: proc(event: sdl.Event) {
+app_handle_event :: proc(event: ^sdl.Event) {
+    if !self.mouse_captured {
+        imgui_process_event(event)
+    }
+
     #partial switch event.type {
     case .QUIT: self.running = false
     case .WINDOW_MINIMIZED: self.minimized = true
@@ -135,8 +140,7 @@ app_run :: proc() {
         app_wait_if_minimized()
 
         for sdl.PollEvent(&event) {
-            imgui_process_event(&event)
-            app_handle_event(event)
+            app_handle_event(&event)
         }
         
         voxel_state_update(&self.voxel_state, self.dt)
