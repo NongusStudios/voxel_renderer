@@ -84,6 +84,8 @@ ray_init :: proc(self: ^Voxel_State) -> (ok: bool) {
     ray_init_descriptors(self) or_return
     ray_init_pipelines(self) or_return
 
+    ray_upload_voxels(self)
+
     return true
 }
 

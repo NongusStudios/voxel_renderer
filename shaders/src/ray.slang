@@ -1,7 +1,7 @@
 [vk_binding(0, 0)]
 RWTexture2D<float4> output;
 
-[vk_binding(0, 1)]
+[vk_binding(1, 0)]
 StructuredBuffer<uint8_t> voxel_data;
 
 struct Push_Constants {
@@ -21,5 +21,8 @@ void main(
     if(id.x >= p.viewport_extent.x || id.y >= p.viewport_extent.y) return;
 
     int2 texel = int2(id.xy);
-    output[texel] = float4(float2(gid.xy) / 8.0, 0.0, 1.0);
+    
+    if (voxel_data[texel.x + texel.y * 16 * 32] > 0) {
+        output[texel] = float4(float2(gid.xy) / 8.0, 0.0, 1.0);
+    }
 }

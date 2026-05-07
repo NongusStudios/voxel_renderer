@@ -1,5 +1,6 @@
 package main
 
+import "core:log"
 import "core:math"
 World :: struct {
     chunks: []Chunk,
@@ -156,19 +157,68 @@ world_to_grid_local_position :: proc(position: float3, world_size: int) -> float
     return position / VOXEL_UNIT_SIZE + size
 }
 
+// Origin must be in grid space
+world_ray_intersection :: proc(self: ^World, origin: float3, direction: float3) -> (min: f32, max: f32, intersect: bool) {
+    min = -math.INF_F32
+    max =  math.INF_F32
+
+    grid_max_bounds := f32(self.size * CHUNK_SIZE)
+    grid_min_bounds: f32 = 0
+    t_min: float3
+    t_max: float3
+    for a in 0..<3 {
+        inv: f32
+        if direction[a] != 0 {
+            inv = 1.0 / direction[a]
+        } else {
+            continue
+        }
+
+        if inv >= 0 {
+            t_min[a] = (grid_min_bounds - origin[a]) * inv
+            t_max[a] = (grid_max_bounds - origin[a]) * inv
+        } else {
+            t_min[a] = (grid_max_bounds - origin[a]) * inv
+            t_max[a] = (grid_min_bounds - origin[a]) * inv
+        }
+
+        if min > t_max[a] || t_min[a] > max { return 0, 0, false }
+
+        if t_min[a] > min {
+            min = t_min[a]
+        }
+        if t_max[a] < max {
+            max = t_max[a]
+        }
+    }
+
+    return min, max, min < math.INF_F32 && max > 0
+}
+
 world_cast_ray :: proc(self: ^World, origin: float3, direction: float3) -> (pos: int3, normal: int3, hit: bool) {
     /* Initialisation */
     grid_origin := world_to_grid_local_position(origin, self.size)
-    grid_max_bounds := self.size * CHUNK_SIZE
+    ray_min, ray_max, ray_intersect := world_ray_intersection(self, grid_origin, direction)
+    if !ray_intersect {
+        return {}, {}, false
+    }
+
+    ray_min = max(ray_min, 0)
+    ray_start := grid_origin + direction * ray_min
+    ray_end   := grid_origin + direction * ray_max
 
     start_index := int3{
-        int(math.floor(grid_origin.x)),
-        int(math.floor(grid_origin.y)),
-        int(math.floor(grid_origin.z)),
+        int(max(1, math.ceil(ray_start.x))),
+        int(max(1, math.ceil(ray_start.y))),
+        int(max(1, math.ceil(ray_start.z))),
+    }
+    end_index := int3{
+        int(max(1, math.ceil(ray_end.x))),
+        int(max(1, math.ceil(ray_end.y))),
+        int(max(1, math.ceil(ray_end.z))),
     }
     current_index := start_index
 
-    // Step
     get_step :: proc(dir: f32) -> int {
         if dir > 0 {
             return  1
@@ -178,7 +228,6 @@ world_cast_ray :: proc(self: ^World, origin: float3, direction: float3) -> (pos:
         return 0
     }
 
-    // t_max
     get_t_max :: proc(dir: f32, current: int, org: f32) -> f32 {
         cur: int
         if dir > 0 {
@@ -197,18 +246,13 @@ world_cast_ray :: proc(self: ^World, origin: float3, direction: float3) -> (pos:
 
     for a in 0..<3 {
         step[a]    = get_step(direction[a])
-        t_delta[a] = abs(1 / direction[a]) if direction[a] != 0 else math.INF_F32
-        
-        /* NOTE not accounted for:
-            tMin - Calculated during the initialization phase, this determines the minimum time needed to cross into the grid.
-            This would be added to tMaxX in the initialization phase.
-        */
-        //t_max[a] = get_t_max(direction[a], current_index[a], grid_origin[a])
-        t_max[a] = (f32(start_index[a]) - grid_origin[a]) / direction[a]
+        t_delta[a] = abs(1 / direction[a]) if direction[a] != 0 else 0
+        t_max[a] = ray_min + get_t_max(direction[a], current_index[a], ray_start[a])
     }
 
     /* Traversal */
-    for {
+    grid_max_bounds := self.size * CHUNK_SIZE
+    for current_index != end_index {
         // Keeps track of the traversal direction
         traversal : int3
 
@@ -234,7 +278,7 @@ world_cast_ray :: proc(self: ^World, origin: float3, direction: float3) -> (pos:
             current_index.y < 0 || current_index.y >= grid_max_bounds ||
             current_index.z < 0 || current_index.z >= grid_max_bounds
         {
-            break
+            continue
         }
 
         // Check if current voxel is solid

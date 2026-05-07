@@ -199,12 +199,8 @@ create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
     self.camera.position = float3{0, -(WORLD_SIZE * CHUNK_SIZE) * 0.6, 0}
     self.matrices.view = camera_view_matrix(&self.camera)
  
-    self.matrices.model = la.matrix4_scale(float3{VOXEL_UNIT_SIZE, VOXEL_UNIT_SIZE, VOXEL_UNIT_SIZE})
-    self.matrices.model *= la.matrix4_translate(float3{
-        -(WORLD_SIZE * CHUNK_SIZE) / 2.0,
-        -(WORLD_SIZE * CHUNK_SIZE) / 2.0,
-        -(WORLD_SIZE * CHUNK_SIZE) / 2.0,
-    }) 
+    self.matrices.model = la.matrix4_scale(float3(VOXEL_UNIT_SIZE))
+    self.matrices.model *= la.matrix4_translate(float3(-(WORLD_SIZE * CHUNK_SIZE) / 2.0)) 
 
     return self, true
 }
@@ -361,6 +357,7 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
             "Ray_Traversal"
         }
         im.combo_char("Rendering Method", transmute(^i32)&self.method, raw_data(items[:]), i32(len(items)))
+        im.text("Camera Position: %f, %f, %f", self.camera.position.x, self.camera.position.y, self.camera.position.z)
         im.text("Frame Time: %f ms", frame_avg * 1000)
         im.text("Avg Mesh Gen: %i us", int(time.duration_microseconds(
             benchmark_get_metric_avg("chunk_mesh"),
