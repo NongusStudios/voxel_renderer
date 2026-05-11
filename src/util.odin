@@ -45,9 +45,13 @@ float4 :: la.Vector4f32
 float4x4 :: la.Matrix4f32
 
 int2 :: [2]int
+int32_2 :: [2]i32
 
 int32_3 :: [3]i32
 int3 :: [3]int
+
+uint2 :: [2]u32
+uint3 :: [3]u32
 
 int3_zero :: int3{0, 0, 0}
 int3_one :: int3{1, 1, 1}

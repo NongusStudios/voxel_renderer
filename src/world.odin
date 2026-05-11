@@ -1,5 +1,6 @@
 package main
 
+import "base:intrinsics"
 import "core:log"
 import "core:math"
 World :: struct {
@@ -208,14 +209,14 @@ world_cast_ray :: proc(self: ^World, origin: float3, direction: float3) -> (pos:
     ray_end   := grid_origin + direction * ray_max
 
     start_index := int3{
-        int(max(1, math.ceil(ray_start.x))),
-        int(max(1, math.ceil(ray_start.y))),
-        int(max(1, math.ceil(ray_start.z))),
+        int(math.floor(ray_start.x)),
+        int(math.floor(ray_start.y)),
+        int(math.floor(ray_start.z)),
     }
     end_index := int3{
-        int(max(1, math.ceil(ray_end.x))),
-        int(max(1, math.ceil(ray_end.y))),
-        int(max(1, math.ceil(ray_end.z))),
+        int(math.floor(ray_end.x)),
+        int(math.floor(ray_end.y)),
+        int(math.floor(ray_end.z)),
     }
     current_index := start_index
 
@@ -250,9 +251,15 @@ world_cast_ray :: proc(self: ^World, origin: float3, direction: float3) -> (pos:
         t_max[a] = ray_min + get_t_max(direction[a], current_index[a], ray_start[a])
     }
 
+    steps := int3{
+        (end_index.x - start_index.x) * step.x,
+        (end_index.y - start_index.y) * step.y,
+        (end_index.z - start_index.z) * step.z,
+    }
+
     /* Traversal */
     grid_max_bounds := self.size * CHUNK_SIZE
-    for current_index != end_index {
+    for steps.x > 0 || steps.y > 0 || steps.z > 0 {
         // Keeps track of the traversal direction
         traversal : int3
 
@@ -262,16 +269,19 @@ world_cast_ray :: proc(self: ^World, origin: float3, direction: float3) -> (pos:
             current_index.x += step.x
             t_max.x += t_delta.x
             traversal.x = step.x
+            steps.x -= 1
         } else if t_max.y < t_max.z {
             // Move in Y
             current_index.y += step.y
             t_max.y += t_delta.y
             traversal.y = step.y
+            steps.y -= 1
         } else {
             // Move in Z
             current_index.z += step.z
             t_max.z += t_delta.z
             traversal.z = step.z
+            steps.z -= 1
         }
 
         if  current_index.x < 0 || current_index.x >= grid_max_bounds ||

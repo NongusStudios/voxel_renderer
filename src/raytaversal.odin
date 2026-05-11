@@ -5,7 +5,8 @@ import sdl "vendor:sdl3"
 import vk  "vendor:vulkan"
 
 Ray_Push_Constant :: struct {
-    viewport_extent: vk.Extent2D,
+    viewport_extent: uint2,
+    world_size:      u32,
 }
 
 ray_init_voxel_objects :: proc(self: ^Voxel_State) -> (ok: bool) {
@@ -182,7 +183,11 @@ ray_draw :: proc(self: ^Voxel_State, frame: ^Frame_Data, barrier: ^Pipeline_Barr
     vk.CmdBindPipeline(cmd, .COMPUTE, self.ray.pipeline.pipeline)
 
     pconst := Ray_Push_Constant{
-        viewport_extent = self.viewport_extent,
+        viewport_extent = uint2{
+            self.viewport_extent.width,
+            self.viewport_extent.height,
+        },
+        world_size = u32(self.world.size),
     }
     vk.CmdPushConstants(cmd,
         self.ray.pipeline.layout, {.COMPUTE},
