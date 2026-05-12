@@ -198,12 +198,20 @@ ray_draw :: proc(self: ^Voxel_State, frame: ^Frame_Data, barrier: ^Pipeline_Barr
         self.viewport_extent.width,
         self.viewport_extent.height,
     }
+
+    pixel_to_clip := float4x4{
+        2.0/f32(extent.x),  0.0,               0.0, -1.0,
+        0.0,                2.0/f32(extent.y), 0.0, -1.0,
+        0.0,                0.0,               1.0,  0.0,
+        0.0,                0.0,               0.0,  1.0
+    }
+
     pconst := Ray_Push_Constant{
         viewport_extent = extent,
         world_size = u32(self.world.size),
         color = VOXEL_COLOR,
         origin = world_to_grid_local_position(self.camera.position, self.world.size),
-        inv_projection = la.inverse(self.matrices.projection),
+        inv_projection = la.inverse(self.matrices.projection) * pixel_to_clip,
         inv_view       = la.inverse(self.matrices.view),
     }
     vk.CmdPushConstants(cmd,

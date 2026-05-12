@@ -166,12 +166,11 @@ void main(
     if(id.x >= p.viewport_extent.x || id.y >= p.viewport_extent.y) return;
 
     var texel = uint2(id.xy);
-    var uv = (float2(texel) * 2.0) / float2(p.viewport_extent) - 1.0;
     
-    var ray_cam   = mul(p.inv_projection, float4(uv, 1.0, 1.0));
+    var ray_cam   = mul(p.inv_projection, float4(float2(texel), 0.0, 1.0));
     var ray_world = normalize(mul((float3x3)p.inv_view, ray_cam.xyz));
 
-    var ray_colour = float4(ray_world * 0.5 + 0.5, 1.0);
+    //var ray_colour = float4(ray_world * 0.5 + 0.5, 1.0);
 
     var result = traverse(p.origin.xyz, ray_world);
 
