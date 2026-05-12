@@ -162,7 +162,7 @@ voxel_state_generate_terrain :: proc(self: ^Voxel_State) {
 }
 
 create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
-    self.method = .Mesher
+    self.method = .Ray_Traversal
     self.world = create_world(WORLD_SIZE)
     self.gui.place_radius = 2
     
@@ -213,7 +213,7 @@ destroy_voxel_state :: proc(self: ^Voxel_State) {
     ray_destroy(self)
 }
 
-get_projection_matrix :: proc(fov: f32 = 80.0) -> float4x4 {
+get_projection_matrix :: proc(fov: f32 = CAMERA_FOV) -> float4x4 {
     extent := get_window_extent()
     aspect := f32(extent.width) / f32(extent.height)
 
@@ -358,6 +358,8 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
         }
         im.combo_char("Rendering Method", transmute(^i32)&self.method, raw_data(items[:]), i32(len(items)))
         im.text("Camera Position: %f, %f, %f", self.camera.position.x, self.camera.position.y, self.camera.position.z)
+        forward := camera_target_vector(&self.camera)
+        im.text("Camera Forward: %f, %f, %f", forward.x, forward.y, forward.z)
         im.text("Frame Time: %f ms", frame_avg * 1000)
         im.text("Avg Mesh Gen: %i us", int(time.duration_microseconds(
             benchmark_get_metric_avg("chunk_mesh"),
@@ -397,7 +399,6 @@ voxel_state_draw :: proc(self: ^Voxel_State) {
 
     voxel_state_draw_imgui(self)
     self.matrices.view = camera_view_matrix(&self.camera)
-
 
     if frame, ok := start_frame(); ok {
         // Set options

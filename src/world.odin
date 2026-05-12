@@ -1,23 +1,26 @@
 package main
 
-import "base:intrinsics"
-import "core:log"
 import "core:math"
+
 World :: struct {
     chunks: []Chunk,
+    flat_voxels: []Voxel,
     size: int,
     updates: map[int3]u8,
+    flat_dirty: bool,
 }
 
 create_world :: proc(size: int) -> (self: World) {
     self.size = size
     self.chunks = make([]Chunk, size * size * size)
+    self.flat_voxels = make([]Voxel, size * size * size * CHUNK_FLAT_SIZE)
     self.updates = make(map[int3]u8)
     return
 }
 
 destroy_world :: proc(self: ^World) {
     delete(self.chunks)
+    delete(self.flat_voxels)
     delete(self.updates)
 }
 
@@ -67,11 +70,23 @@ world_get_chunk :: proc(self: ^World, pos: int3) -> ^Chunk {
 }
 
 // Uses coordinates that covers every chunk [0, CHUNK_SIZE * self.world] on any given axis
-world_at :: proc(self: ^World, world_pos: int3) -> ^Voxel {
+world_at :: proc(self: ^World, world_pos: int3) -> Voxel {
     assert(world_position_in_bounds(self, world_pos))
 
     chunk, pos := world_translate_coords(world_pos)
-    return chunk_at(world_get_chunk(self, chunk), pos)
+    return chunk_at(world_get_chunk(self, chunk), pos)^
+}
+
+world_flat_set :: proc(self: ^World, pos: int3) {
+    di := self.size * CHUNK_SIZE
+    self.flat_voxels[pos.x + pos.y * di + pos.z * di * di] = 1
+    self.flat_dirty = true
+}
+
+world_flat_unset :: proc(self: ^World, pos: int3) {
+    di := self.size * CHUNK_SIZE
+    self.flat_voxels[pos.x + pos.y * di + pos.z * di * di] = 0
+    self.flat_dirty = true
 }
 
 world_set :: proc(self: ^World, world_pos: int3) {
@@ -79,6 +94,7 @@ world_set :: proc(self: ^World, world_pos: int3) {
 
     chunk, pos := world_translate_coords(world_pos)
     chunk_set(world_get_chunk(self, chunk), pos)
+    world_flat_set(self, world_pos)
     
     world_queue_update(self, chunk, pos)
 }
@@ -87,6 +103,7 @@ world_unset :: proc(self: ^World, world_pos: int3) {
     assert(world_position_in_bounds(self, world_pos))
     chunk, pos := world_translate_coords(world_pos)
     chunk_unset(world_get_chunk(self, chunk), pos)
+    world_flat_unset(self, world_pos)
 
     world_queue_update(self, chunk, pos)
 }
@@ -159,7 +176,7 @@ world_to_grid_local_position :: proc(position: float3, world_size: int) -> float
 }
 
 // Origin must be in grid space
-world_ray_intersection :: proc(self: ^World, origin: float3, direction: float3) -> (min: f32, max: f32, intersect: bool) {
+world_ray_intersection :: proc(self: ^World, origin: float3, direction: float3, inv_dir: float3) -> (min: f32, max: f32, intersect: bool) {
     min = -math.INF_F32
     max =  math.INF_F32
 
@@ -168,19 +185,16 @@ world_ray_intersection :: proc(self: ^World, origin: float3, direction: float3) 
     t_min: float3
     t_max: float3
     for a in 0..<3 {
-        inv: f32
-        if direction[a] != 0 {
-            inv = 1.0 / direction[a]
-        } else {
+        if direction[a] == 0 {
             continue
         }
 
-        if inv >= 0 {
-            t_min[a] = (grid_min_bounds - origin[a]) * inv
-            t_max[a] = (grid_max_bounds - origin[a]) * inv
+        if inv_dir[a] >= 0 {
+            t_min[a] = (grid_min_bounds - origin[a]) * inv_dir[a]
+            t_max[a] = (grid_max_bounds - origin[a]) * inv_dir[a]
         } else {
-            t_min[a] = (grid_max_bounds - origin[a]) * inv
-            t_max[a] = (grid_min_bounds - origin[a]) * inv
+            t_min[a] = (grid_max_bounds - origin[a]) * inv_dir[a]
+            t_max[a] = (grid_min_bounds - origin[a]) * inv_dir[a]
         }
 
         if min > t_max[a] || t_min[a] > max { return 0, 0, false }
@@ -199,7 +213,12 @@ world_ray_intersection :: proc(self: ^World, origin: float3, direction: float3) 
 world_cast_ray :: proc(self: ^World, origin: float3, direction: float3) -> (pos: int3, normal: int3, hit: bool) {
     /* Initialisation */
     grid_origin := world_to_grid_local_position(origin, self.size)
-    ray_min, ray_max, ray_intersect := world_ray_intersection(self, grid_origin, direction)
+    inv_dir := float3{
+        1 / direction.x if direction.x != 0 else 0,
+        1 / direction.y if direction.y != 0 else 0,
+        1 / direction.z if direction.z != 0 else 0,
+    }
+    ray_min, ray_max, ray_intersect := world_ray_intersection(self, grid_origin, direction, inv_dir)
     if !ray_intersect {
         return {}, {}, false
     }
@@ -229,7 +248,7 @@ world_cast_ray :: proc(self: ^World, origin: float3, direction: float3) -> (pos:
         return 0
     }
 
-    get_t_max :: proc(dir: f32, current: int, org: f32) -> f32 {
+    get_t_max :: proc(dir: f32, inv: f32, current: int, org: f32) -> f32 {
         cur: int
         if dir > 0 {
             cur = current + 1
@@ -239,7 +258,7 @@ world_cast_ray :: proc(self: ^World, origin: float3, direction: float3) -> (pos:
             return math.INF_F32
         }
 
-        return (f32(cur) - org) / dir
+        return (f32(cur) - org) * inv
     }
     
     step: int3
@@ -247,17 +266,17 @@ world_cast_ray :: proc(self: ^World, origin: float3, direction: float3) -> (pos:
 
     for a in 0..<3 {
         step[a]    = get_step(direction[a])
-        t_delta[a] = abs(1 / direction[a]) if direction[a] != 0 else 0
-        t_max[a] = ray_min + get_t_max(direction[a], current_index[a], ray_start[a])
+        t_delta[a] = abs(inv_dir[a]) if direction[a] != 0 else 0
+        t_max[a] = ray_min + get_t_max(direction[a], inv_dir[a], current_index[a], ray_start[a])
     }
 
+    /* Traversal */
     steps := int3{
         (end_index.x - start_index.x) * step.x,
         (end_index.y - start_index.y) * step.y,
         (end_index.z - start_index.z) * step.z,
     }
 
-    /* Traversal */
     grid_max_bounds := self.size * CHUNK_SIZE
     for steps.x > 0 || steps.y > 0 || steps.z > 0 {
         // Keeps track of the traversal direction
@@ -292,7 +311,7 @@ world_cast_ray :: proc(self: ^World, origin: float3, direction: float3) -> (pos:
         }
 
         // Check if current voxel is solid
-        if world_at(self, current_index)^ > 0 {
+        if world_at(self, current_index) > 0 {
             return current_index, -traversal, true
         }
     }

@@ -1,12 +1,20 @@
 package main
 
+import "core:log"
+import "core:encoding/ini"
 import "core:math"
+import la "core:math/linalg"
 import sdl "vendor:sdl3"
 import vk  "vendor:vulkan"
 
 Ray_Push_Constant :: struct {
+    inv_projection: float4x4,
+    inv_view: float4x4,
+    color: float4,
+    origin: float3,
+    _: byte,
     viewport_extent: uint2,
-    world_size:      u32,
+    world_size: u32,
 }
 
 ray_init_voxel_objects :: proc(self: ^Voxel_State) -> (ok: bool) {
@@ -85,8 +93,6 @@ ray_init :: proc(self: ^Voxel_State) -> (ok: bool) {
     ray_init_descriptors(self) or_return
     ray_init_pipelines(self) or_return
 
-    ray_upload_voxels(self)
-
     return true
 }
 
@@ -95,7 +101,11 @@ ray_destroy :: proc(self: ^Voxel_State) {
 }
 
 ray_upload_voxels :: proc(self: ^Voxel_State) {
-    buffer_write_mapped_memory(self.ray.voxel_buffer, self.world.chunks[:])
+    if !self.world.flat_dirty {
+        return
+    }
+    self.world.flat_dirty = false
+    buffer_write_mapped_memory(self.ray.voxel_buffer, self.world.flat_voxels)
 }
 
 ray_begin_rendering :: proc(self: ^Voxel_State,
@@ -178,16 +188,23 @@ ray_present_frame :: proc(self: ^Voxel_State,
 
 ray_draw :: proc(self: ^Voxel_State, frame: ^Frame_Data, barrier: ^Pipeline_Barrier) {
     cmd := frame.command_buffer
+
+    ray_upload_voxels(self)
     ray_begin_rendering(self, cmd, barrier)
     
     vk.CmdBindPipeline(cmd, .COMPUTE, self.ray.pipeline.pipeline)
 
+    extent := uint2{
+        self.viewport_extent.width,
+        self.viewport_extent.height,
+    }
     pconst := Ray_Push_Constant{
-        viewport_extent = uint2{
-            self.viewport_extent.width,
-            self.viewport_extent.height,
-        },
+        viewport_extent = extent,
         world_size = u32(self.world.size),
+        color = VOXEL_COLOR,
+        origin = world_to_grid_local_position(self.camera.position, self.world.size),
+        inv_projection = la.inverse(self.matrices.projection),
+        inv_view       = la.inverse(self.matrices.view),
     }
     vk.CmdPushConstants(cmd,
         self.ray.pipeline.layout, {.COMPUTE},

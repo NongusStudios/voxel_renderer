@@ -192,7 +192,7 @@ binary_greedy_mesher_generate_quads :: proc(self: ^Voxel_State, chunk_pos: int3,
                     continue
                 }
 
-                if world_at(&self.world, pos)^ == 1 {
+                if world_at(&self.world, pos) == 1 {
                     // x axis
                     voxel_masks[0][z][y] |= 1 << u64(x)
                     // y axis
