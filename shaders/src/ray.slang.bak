@@ -38,39 +38,28 @@ struct Ray_Intersection_Result {
     bool  hit;
 }
 
-Ray_Intersection_Result ray_intersect_grid(float3 origin, float3 direction, float3 inv_dir) {
-    Ray_Intersection_Result result;
-    result.t_min = -INF;
-    result.t_max =  INF;
-    result.hit   = false;
+Ray_Intersection_Result ray_intersect_grid(float3 origin, uint grid_max, float3 inv_dir, float3 sgn_dir) {
+    Ray_Intersection_Result result = {};
 
-    float grid_min = 0;
-    float grid_max = float(p.world_size * CHUNK_SIZE);
+    // Simpler method of calculating entry and exit t values
+    var t1 = -origin * inv_dir;
+    var t2 = (float3(grid_max) - origin) * inv_dir;
 
-    float3 t_min, t_max;
-    for (var a = 0; a < 3; a++) {
-        if (direction[a] == 0.0) {
-            continue;
-        }
+    var t_mins = min(t1, t2);
+    var t_maxs = max(t1, t2);
 
-        if (inv_dir[a] >= 0) {
-            t_min[a] = (grid_min - origin[a]) * inv_dir[a];
-            t_max[a] = (grid_max - origin[a]) * inv_dir[a];
-        } else {
-            t_min[a] = (grid_max - origin[a]) * inv_dir[a];
-            t_max[a] = (grid_min - origin[a]) * inv_dir[a];
-        }
-
-        if (result.t_min > t_max[a] || t_min[a] > result.t_max) { return result; }
-        if (t_min[a] > result.t_min) {
-            result.t_min = t_min[a];
-        }
-        if (t_max[a] < result.t_max) {
-            result.t_max = t_max[a];
-        }
+    float t_min = 0, t_max = INF;
+    for(int i = 0; i < 3; i++){
+        t_min = max(t_min, t_mins[i]);
+        t_max = min(t_max, t_maxs[i]);
     }
+
+    // Ray doesn't intersect grid
+    if (t_min > t_max) return result;
     
-    result.hit = result.t_min < INF && result.t_max > 0.0;
+    result.hit = true;
+    result.t_min = t_min;
+    result.t_max = t_max;
     return result;
 }
 
@@ -86,7 +75,8 @@ Ray_Traversal_Result traverse(float3 origin, float3 direction) {
 
     var grid_max = p.world_size * CHUNK_SIZE;
     var inv_dir = 1.0 / direction;
-    var intersect = ray_intersect_grid(origin, direction, inv_dir);
+    var sgn_dir = sign(inv_dir);
+    var intersect = ray_intersect_grid(origin, grid_max, inv_dir, sgn_dir);
     if (!intersect.hit) {
         return result;
     }

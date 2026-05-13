@@ -271,11 +271,7 @@ world_cast_ray :: proc(self: ^World, origin: float3, direction: float3) -> (pos:
     }
 
     /* Traversal */
-    steps := int3{
-        (end_index.x - start_index.x) * step.x,
-        (end_index.y - start_index.y) * step.y,
-        (end_index.z - start_index.z) * step.z,
-    }
+    steps := (end_index - start_index) * step
 
     grid_max_bounds := self.size * CHUNK_SIZE
     for steps.x > 0 || steps.y > 0 || steps.z > 0 {

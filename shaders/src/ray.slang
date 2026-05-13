@@ -5,8 +5,7 @@ RWTexture2D<float4> output;
 StructuredBuffer<uint8_t> voxel_data;
 
 static const uint CHUNK_SIZE = 32;
-static const float EPSILON = 1e-5F;
-static const float INF = 3.402823466e+38F;
+static const float FLT_MAX = 3.402823466e+38F;
 
 struct Push_Constants {
     float4x4 inv_projection;
@@ -22,9 +21,6 @@ Push_Constants p;
 
 uint8_t at(int3 pos) {
     uint di = p.world_size * CHUNK_SIZE;
-    if (pos.x >= di || pos.y >= di || pos.z >= di ||
-        pos.x < 0   || pos.y < 0   || pos.z < 0) return 0;
-
     return voxel_data[pos.x + pos.y * di + pos.z * di * di];
 }
 
@@ -38,110 +34,83 @@ struct Ray_Intersection_Result {
     bool  hit;
 }
 
-Ray_Intersection_Result ray_intersect_grid(float3 origin, float3 direction, float3 inv_dir) {
-    Ray_Intersection_Result result;
-    result.t_min = -INF;
-    result.t_max =  INF;
-    result.hit   = false;
+Ray_Intersection_Result ray_intersect_grid(float3 origin, uint grid_max, float3 inv_dir, float3 sgn_dir) {
+    Ray_Intersection_Result result = {};
 
-    float grid_min = 0;
-    float grid_max = float(p.world_size * CHUNK_SIZE);
+    // Simpler method of calculating entry and exit t values
+    var t1 = -origin * inv_dir;
+    var t2 = (float3(grid_max) - origin) * inv_dir;
 
-    float3 t_min, t_max;
-    for (var a = 0; a < 3; a++) {
-        if (direction[a] == 0.0) {
-            continue;
-        }
+    var t_mins = min(t1, t2);
+    var t_maxs = max(t1, t2);
 
-        if (inv_dir[a] >= 0) {
-            t_min[a] = (grid_min - origin[a]) * inv_dir[a];
-            t_max[a] = (grid_max - origin[a]) * inv_dir[a];
-        } else {
-            t_min[a] = (grid_max - origin[a]) * inv_dir[a];
-            t_max[a] = (grid_min - origin[a]) * inv_dir[a];
-        }
-
-        if (result.t_min > t_max[a] || t_min[a] > result.t_max) { return result; }
-        if (t_min[a] > result.t_min) {
-            result.t_min = t_min[a];
-        }
-        if (t_max[a] < result.t_max) {
-            result.t_max = t_max[a];
-        }
+    float t_min = 0, t_max = FLT_MAX;
+    for(int i = 0; i < 3; i++){
+        t_min = max(t_min, t_mins[i]);
+        t_max = min(t_max, t_maxs[i]);
     }
+
+    // Ray doesn't intersect grid
+    if (t_min > t_max) return result;
     
-    result.hit = result.t_min < INF && result.t_max > 0.0;
+    result.hit = true;
+    result.t_min = t_min;
+    result.t_max = t_max;
     return result;
 }
 
 struct Ray_Traversal_Result {
     uint3 pos;
-    int3 normal;
+    float3 normal;
     bool hit;
 }
 
 Ray_Traversal_Result traverse(float3 origin, float3 direction) {
-    Ray_Traversal_Result result;
-    result.hit = false;
+    Ray_Traversal_Result result = {};
 
     var grid_max = p.world_size * CHUNK_SIZE;
-    var inv_dir = 1.0 / direction;
+    var inv_dir = clamp(1.0 / direction, -FLT_MAX, FLT_MAX);
     var sgn_dir = sign(inv_dir);
 
-    var intersect = ray_intersect_grid(origin, direction, inv_dir);
-    if (!intersect.hit) {
-        return result;
-    }
+    var intersect = ray_intersect_grid(origin, grid_max, inv_dir, sgn_dir);
+    if (!intersect.hit) return result;
 
-    intersect.t_min = max(intersect.t_min, 0);
-    var ray_start = origin + direction * intersect.t_min;
-    var ray_end   = origin + direction * intersect.t_max;
+    // Ensure origin is inside the grid
+    origin += direction * intersect.t_min;
+    var current_index = uint3(clamp(floor(origin), float3(0.0), float3(grid_max-1)));
+    var t_max = (float3(current_index) + 0.5 * (1.0 + sgn_dir) - origin) * inv_dir;
     
-    var start_index = int3(
-        int(floor(ray_start.x)),
-        int(floor(ray_start.y)),
-        int(floor(ray_start.z)),
-    );
-
-    var current_index = start_index;
-
     var step = uint3(int3(sgn_dir));
-    float3 t_delta, t_max;
+    var t_delta = abs(inv_dir);
     
-    t_max = (float3(current_index) - ray_start) * inv_dir;
-    t_delta = abs(inv_dir);
+    var traversal_dir = int(-1);
 
+    if (!is_solid(current_index)) // Don't traverse if instant hit
     while (true) {
-        var traversal_dir = int3(0);
-        if (t_max.x < t_max.y && t_max.x < t_max.z) {
+        if (t_max.x < t_max.y && t_max.x < t_max.z) { // X traversal
             current_index.x += step.x;
             t_max.x += t_delta.x;
-            traversal_dir.x = step.x;
-        } else if (t_max.y < t_max.z) {
+            traversal_dir = 0;
+        } else if (t_max.y < t_max.z) { // Y traversal
             current_index.y += step.y;
             t_max.y += t_delta.y;
-            traversal_dir.y = step.y;
-        } else {
+            traversal_dir = 1;
+        } else { // Z traversal
             current_index.z += step.z;
             t_max.z += t_delta.z;
-            traversal_dir.z = step.z;
+            traversal_dir = 2;
         }
         
-        if  (current_index.x < 0 || current_index.x >= grid_max ||
-             current_index.y < 0 || current_index.y >= grid_max ||
-             current_index.z < 0 || current_index.z >= grid_max)
-        {
-            break;
-        }
+        if (any(current_index >= grid_max)) return result; 
 
         if (is_solid(current_index)) {
-            result.pos    = current_index;
-            result.normal = -traversal_dir;
-            result.hit    = true;
-            return result;
+            break;
         }
     }
-    
+
+    result.hit = true;
+    if (traversal_dir >= 0) result.normal[traversal_dir] = -sgn_dir[traversal_dir];
+    result.pos = current_index;
     return result;
 }
 
@@ -157,9 +126,9 @@ void main(
     var texel = uint2(id.xy);
     
     var ray_cam   = mul(p.inv_projection, float4(float2(texel), 0.0, 1.0));
-    var ray_world = normalize(mul((float3x3)p.inv_view, ray_cam.xyz));
+    var ray_world = mul((float3x3)p.inv_view, ray_cam.xyz);
 
-    var ray_colour = float4(ray_world * 0.5 + 0.5, 1.0);
+    var ray_colour = float3(ray_world * 0.5 + 0.5);
 
     var result = traverse(p.origin.xyz, ray_world);
 
@@ -178,12 +147,14 @@ void main(
             brightness = 0.4;
         } else if (normal.z > 0) {
             brightness = 0.8;
-        } else {
+        } else if (normal.z < 0) {
             brightness = 0.5;
+        } else {
+            brightness = 1.0;
         }
 
-        output[texel] = float4(p.color.xyz * brightness, 1.0) * ray_colour;
+        output[texel] = float4(p.color.xyz * brightness, 1.0);
     } else {
-        output[texel] = float4(0.0, 0.0, 0.0, 1.0);
+        output[texel] = float4(ray_colour * 0.2, 1.0);
     }
 }
