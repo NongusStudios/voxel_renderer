@@ -106,7 +106,7 @@ Ray_Traversal_Result traverse(float3 origin, float3 direction) {
 
     var current_index = start_index;
 
-    uint3 step = uint3(int3(sgn_dir));
+    var step = uint3(int3(sgn_dir));
     float3 t_delta, t_max;
     
     t_max = (float3(current_index) - ray_start) * inv_dir;
