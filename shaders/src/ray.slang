@@ -87,7 +87,6 @@ Ray_Traversal_Result traverse(float3 origin, float3 direction) {
     var grid_max = p.world_size * CHUNK_SIZE;
     var inv_dir = 1.0 / direction;
     var sgn_dir = sign(inv_dir);
-    inv_dir = clamp(inv_dir, float3(-INF), float3(INF));
 
     var intersect = ray_intersect_grid(origin, direction, inv_dir);
     if (!intersect.hit) {
@@ -95,7 +94,7 @@ Ray_Traversal_Result traverse(float3 origin, float3 direction) {
     }
 
     intersect.t_min = max(intersect.t_min, 0);
-    var ray_start = origin + direction * (intersect.t_min);
+    var ray_start = origin + direction * intersect.t_min;
     var ray_end   = origin + direction * intersect.t_max;
     
     var start_index = int3(
@@ -110,7 +109,7 @@ Ray_Traversal_Result traverse(float3 origin, float3 direction) {
     float3 t_delta, t_max;
     
     t_max = (float3(current_index) - ray_start) * inv_dir;
-    t_delta = inv_dir * sgn_dir;
+    t_delta = abs(inv_dir);
 
     while (true) {
         var traversal_dir = int3(0);
@@ -160,7 +159,7 @@ void main(
     var ray_cam   = mul(p.inv_projection, float4(float2(texel), 0.0, 1.0));
     var ray_world = normalize(mul((float3x3)p.inv_view, ray_cam.xyz));
 
-    //var ray_colour = float4(ray_world * 0.5 + 0.5, 1.0);
+    var ray_colour = float4(ray_world * 0.5 + 0.5, 1.0);
 
     var result = traverse(p.origin.xyz, ray_world);
 
@@ -183,7 +182,7 @@ void main(
             brightness = 0.5;
         }
 
-        output[texel] = float4(p.color.xyz * brightness, 1.0);
+        output[texel] = float4(p.color.xyz * brightness, 1.0) * ray_colour;
     } else {
         output[texel] = float4(0.0, 0.0, 0.0, 1.0);
     }
