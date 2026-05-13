@@ -13,7 +13,7 @@ import im     "../lib/imgui"
 import im_sdl "../lib/imgui/imgui_impl_sdl3"
 import im_vk  "../lib/imgui/imgui_impl_vulkan"
 
-PRESENT_MODE  :: vk.PresentModeKHR.FIFO_RELAXED
+PRESENT_MODE  :: vk.PresentModeKHR.IMMEDIATE
 FRAME_OVERLAP :: 2
 
 // Vulkan features

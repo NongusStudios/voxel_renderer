@@ -75,6 +75,8 @@ init_app :: proc() -> (ok: bool) {
     init_benchmark()
     benchmark_add_metric("terrain_gen")
     benchmark_add_metric("chunk_mesh")
+    benchmark_add_metric("mesher_frametime")
+    benchmark_add_metric("ray_frametime")
 
     self.voxel_state = create_voxel_state() or_return
 

@@ -169,7 +169,7 @@ create_voxel_state :: proc() -> (self: Voxel_State, ok: bool) {
     benchmark_start_reading("terrain_gen")
     voxel_state_generate_terrain(&self)    
     benchmark_end_reading("terrain_gen")
-    log.info("Terrain generated in: ", time.duration_seconds(benchmark_get_last_reading("terrain_gen")), "s")
+    log.info("Terrain generated in: ", time.duration_seconds(benchmark_get_metric_last_reading("terrain_gen")), "s")
     
     voxel_state_init_viewport(&self) or_return
     voxel_state_create_pipelines(&self) or_return
@@ -296,71 +296,94 @@ voxel_state_draw_imgui :: proc(self: ^Voxel_State) {
         im.checkbox("Draw Grid", &self.gui.grid)
         im.slider_int("Place Radius", &self.gui.place_radius, 1, 50)
     
-        if im.begin_menu("Place") {
-            im.text("Sphere:")
-            im.input_int3("sphere::origin", &self.gui.sphere_origin)
-            im.input_int("sphere::radius", &self.gui.sphere_radius)
-            
-            if im.button("sphere::place") {
-                o := self.gui.sphere_origin
-                oi := int3{
-                    int(o.x),
-                    int(o.y),
-                    int(o.z)
-                }
-                world_sphere(&self.world, oi, int(self.gui.sphere_radius))
-            }
+        //if im.begin_menu("Place") {
+        //    im.text("Sphere:")
+        //    im.input_int3("sphere::origin", &self.gui.sphere_origin)
+        //    im.input_int("sphere::radius", &self.gui.sphere_radius)
+        //    
+        //    if im.button("sphere::place") {
+        //        o := self.gui.sphere_origin
+        //        oi := int3{
+        //            int(o.x),
+        //            int(o.y),
+        //            int(o.z)
+        //        }
+        //        world_sphere(&self.world, oi, int(self.gui.sphere_radius))
+        //    }
 
-            im.text("Cube:")
-            im.input_int3("cube::origin", &self.gui.cube_origin)
-            im.input_int3("cube::dimensions", &self.gui.cube_dimensions)
-            if im.button("cube::place") {
-                o := self.gui.cube_origin
-                oi := int3{
-                    int(o.x),
-                    int(o.y),
-                    int(o.z)
-                }
+        //    im.text("Cube:")
+        //    im.input_int3("cube::origin", &self.gui.cube_origin)
+        //    im.input_int3("cube::dimensions", &self.gui.cube_dimensions)
+        //    if im.button("cube::place") {
+        //        o := self.gui.cube_origin
+        //        oi := int3{
+        //            int(o.x),
+        //            int(o.y),
+        //            int(o.z)
+        //        }
 
-                d := self.gui.cube_dimensions
-                di := int3{
-                    int(d.x),
-                    int(d.y),
-                    int(d.z),
-                }
+        //        d := self.gui.cube_dimensions
+        //        di := int3{
+        //            int(d.x),
+        //            int(d.y),
+        //            int(d.z),
+        //        }
 
-                world_cube(&self.world, oi, di)
-            }
+        //        world_cube(&self.world, oi, di)
+        //    }
 
-            im.end_menu()
-        }
+        //    im.end_menu()
+        //}
 
-        if im.begin_menu("Remove") {
-            im.input_int3("remove::start", &self.gui.remove_min)
-            im.input_int3("remove::extent", &self.gui.remove_max)
-            if im.button("remove") {
-                world_cube(&self.world, int3{
-                    int(self.gui.remove_min.x),
-                    int(self.gui.remove_min.y),
-                    int(self.gui.remove_min.z),
-                }, int3{
-                    int(self.gui.remove_max.x),
-                    int(self.gui.remove_max.y),
-                    int(self.gui.remove_max.z),
-                }, false)
-            }
-            im.end_menu()
-        }
+        //if im.begin_menu("Remove") {
+        //    im.input_int3("remove::start", &self.gui.remove_min)
+        //    im.input_int3("remove::extent", &self.gui.remove_max)
+        //    if im.button("remove") {
+        //        world_cube(&self.world, int3{
+        //            int(self.gui.remove_min.x),
+        //            int(self.gui.remove_min.y),
+        //            int(self.gui.remove_min.z),
+        //        }, int3{
+        //            int(self.gui.remove_max.x),
+        //            int(self.gui.remove_max.y),
+        //            int(self.gui.remove_max.z),
+        //        }, false)
+        //    }
+        //    im.end_menu()
+        //}
 
         items := []cstring {
             "Mesher",
             "Ray_Traversal"
         }
         im.combo_char("Rendering Method", transmute(^i32)&self.method, raw_data(items[:]), i32(len(items)))
+        
         im.text("Camera Position: %f, %f, %f", self.camera.position.x, self.camera.position.y, self.camera.position.z)
         forward := camera_target_vector(&self.camera)
         im.text("Camera Forward: %f, %f, %f", forward.x, forward.y, forward.z)
+        
         im.text("Frame Time: %f ms", frame_avg * 1000)
+
+        mesher :: "mesher_frametime"
+        mesher_min, mesher_max := benchmark_get_metric_min_max(mesher)
+        im.text("Mesher Frame Time (ms): Avg %f, Min %f, Max %f",
+            time.duration_milliseconds(benchmark_get_metric_avg(mesher)),
+            time.duration_milliseconds(mesher_min), time.duration_milliseconds(mesher_max),
+        )
+        if im.button("Clear Mesher") {
+            benchmark_clear_metric(mesher)
+        }
+
+        ray    :: "ray_frametime"
+        ray_min, ray_max := benchmark_get_metric_min_max(ray)
+        im.text("Ray Frame Time (ms): Avg %f, Min %f, Max %f",
+            time.duration_milliseconds(benchmark_get_metric_avg(ray)),
+            time.duration_milliseconds(ray_min), time.duration_milliseconds(ray_max),
+        )
+        if im.button("Clear Ray") {
+            benchmark_clear_metric(ray)
+        }
+
         im.text("Avg Mesh Gen: %i us", int(time.duration_microseconds(
             benchmark_get_metric_avg("chunk_mesh"),
         )))
@@ -400,13 +423,23 @@ voxel_state_draw :: proc(self: ^Voxel_State) {
     voxel_state_draw_imgui(self)
     self.matrices.view = camera_view_matrix(&self.camera)
 
+    if self.method == .Mesher {
+        benchmark_end_reading("mesher_frametime")
+        benchmark_start_reading("mesher_frametime")
+    } else {
+        benchmark_end_reading("ray_frametime")
+        benchmark_start_reading("ray_frametime")
+    }
+
     if frame, ok := start_frame(); ok {
         // Set options
         vk.CmdSetPolygonModeEXT(frame.command_buffer, .LINE if self.gui.wireframe else .FILL)
 
         #partial switch self.method {
-        case .Mesher:        mesher_draw(self, frame, &barrier)
-        case .Ray_Traversal: ray_draw(self, frame, &barrier)
+        case .Mesher:
+            mesher_draw(self, frame, &barrier)
+        case .Ray_Traversal:
+            ray_draw(self, frame, &barrier)
         } 
-    }
+    } 
 }
