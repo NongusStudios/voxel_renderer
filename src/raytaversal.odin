@@ -18,13 +18,32 @@ Ray_Push_Constant :: struct {
 }
 
 ray_init_voxel_objects :: proc(self: ^Voxel_State) -> (ok: bool) {
-    self.ray.voxel_buffer = create_buffer(
+    self.ray.voxel_staging_buffer = create_staging_buffer(
         vk.DeviceSize(self.world.size * self.world.size * self.world.size *
         CHUNK_FLAT_SIZE * size_of(Voxel)),
-        {.STORAGE_BUFFER}, allocation_info(.Cpu_To_Gpu, {}, {.Mapped})
     ) or_return
 
-    track_resources(self.ray.voxel_buffer)
+    di := u32(self.world.size * CHUNK_SIZE)
+    builder := init_image_builder(.R8_UINT, di, di, di)
+    image_builder_set_usage(&builder, {.TRANSFER_DST, .SAMPLED})
+    image_builder_set_type(&builder, .D3, .D3)
+    self.ray.voxel_image = image_builder_build(&builder, allocation_info(.Gpu_Only)) or_return
+
+    cmd := start_one_time_commands() or_return
+    barrier: Pipeline_Barrier
+    pipeline_barrier_add_image_barrier(&barrier,
+        {.ALL_COMMANDS},   {},
+        {.COMPUTE_SHADER}, {.SHADER_READ},
+        .UNDEFINED, .GENERAL,
+        self.ray.voxel_image.image, image_subresource_range({.COLOR}),
+    )
+    cmd_pipeline_barrier(cmd, &barrier)
+    submit_one_time_commands(&cmd)
+
+    track_resources(
+        self.ray.voxel_staging_buffer,
+        self.ray.voxel_image,
+    )
 
     return true
 }
@@ -34,8 +53,8 @@ ray_init_descriptors :: proc(self: ^Voxel_State) -> (ok: bool) {
     defer destroy_descriptor_group_builder(builder)
 
     descriptor_group_builder_add_set(&builder)
-    descriptor_group_builder_add_binding(&builder, .STORAGE_IMAGE,  {.COMPUTE})
-    descriptor_group_builder_add_binding(&builder, .STORAGE_BUFFER, {.COMPUTE})
+    descriptor_group_builder_add_binding(&builder, .STORAGE_IMAGE, {.COMPUTE})
+    descriptor_group_builder_add_binding(&builder, .SAMPLED_IMAGE, {.COMPUTE})
 
     self.ray.descriptor_group = descriptor_group_builder_build(&builder) or_return
     self.ray.descriptor_layout = self.ray.descriptor_group.layouts[0]
@@ -50,9 +69,9 @@ ray_init_descriptors :: proc(self: ^Voxel_State) -> (ok: bool) {
         imageView   = self.color_attachment.view,
     })
 
-    descriptor_writer_add_single_buffer_write(&writer, .STORAGE_BUFFER, vk.DescriptorBufferInfo {
-        buffer = self.ray.voxel_buffer.buffer,
-        range  = self.ray.voxel_buffer.size,
+    descriptor_writer_add_single_image_write(&writer, .SAMPLED_IMAGE, vk.DescriptorImageInfo {
+        imageLayout = .GENERAL,
+        imageView   = self.ray.voxel_image.view,
     })
 
     descriptor_writer_write_set(&writer, self.ray.descriptor_set)
@@ -96,16 +115,34 @@ ray_init :: proc(self: ^Voxel_State) -> (ok: bool) {
     return true
 }
 
-ray_destroy :: proc(self: ^Voxel_State) {
-
-}
-
-ray_upload_voxels :: proc(self: ^Voxel_State) {
+ray_upload_voxels :: proc(self: ^Voxel_State, cmd: vk.CommandBuffer, barrier: ^Pipeline_Barrier) {
     if !self.world.flat_dirty {
         return
     }
     self.world.flat_dirty = false
-    buffer_write_mapped_memory(self.ray.voxel_buffer, self.world.flat_voxels)
+    buffer_write_mapped_memory(self.ray.voxel_staging_buffer, self.world.flat_voxels)
+
+    pipeline_barrier_add_image_barrier(barrier,
+        {.ALL_COMMANDS}, {},
+        {.COPY},         {.TRANSFER_WRITE},
+        .GENERAL, .TRANSFER_DST_OPTIMAL,
+        self.ray.voxel_image.image, image_subresource_range({.COLOR}),
+    )
+    cmd_pipeline_barrier(cmd, barrier)
+
+    cmd_copy_buffer_to_image(cmd,
+        self.ray.voxel_staging_buffer.buffer,
+        self.ray.voxel_image.image, self.ray.voxel_image.extent,
+        image_subresource_layers({.COLOR}),
+    )
+
+    pipeline_barrier_add_image_barrier(barrier,
+        {.COPY}, {.TRANSFER_WRITE},
+        {.COMPUTE_SHADER}, {.SHADER_READ},
+        .TRANSFER_DST_OPTIMAL, .GENERAL,
+        self.ray.voxel_image.image, image_subresource_range({.COLOR}),
+    )
+    cmd_pipeline_barrier(cmd, barrier)
 }
 
 ray_begin_rendering :: proc(self: ^Voxel_State,
@@ -189,7 +226,7 @@ ray_present_frame :: proc(self: ^Voxel_State,
 ray_draw :: proc(self: ^Voxel_State, frame: ^Frame_Data, barrier: ^Pipeline_Barrier) {
     cmd := frame.command_buffer
 
-    ray_upload_voxels(self)
+    ray_upload_voxels(self, cmd, barrier)
     ray_begin_rendering(self, cmd, barrier)
     
     vk.CmdBindPipeline(cmd, .COMPUTE, self.ray.pipeline.pipeline)

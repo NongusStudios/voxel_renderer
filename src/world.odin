@@ -1,5 +1,6 @@
 package main
 
+import la "core:math/linalg"
 import "core:math"
 
 World :: struct {
@@ -75,6 +76,28 @@ world_at :: proc(self: ^World, world_pos: int3) -> Voxel {
 
     chunk, pos := world_translate_coords(world_pos)
     return chunk_at(world_get_chunk(self, chunk), pos)^
+}
+
+morton_encode :: proc(pos: uint3) -> u32 {
+    inflate :: proc(i: u32) -> u32 {
+        n := i
+        n = (n | (n << 16)) & 0xff0000ff
+        n = (n | (n <<  8)) & 0x0f00f00f
+        n = (n | (n <<  4)) & 0xc30c30c3
+        n = (n | (n <<  2)) & 0x49249249
+        return n
+    }
+
+    x := inflate(pos.x)
+    y := inflate(pos.y) << 1
+    z := inflate(pos.z) << 2
+
+    return x | y | z
+}
+
+zorder_curve :: proc(pos: int3, size: int) -> int {
+    p := uint3(la.clamp(pos, int3(0), int3(size * CHUNK_SIZE)))
+    return int(morton_encode(p))
 }
 
 world_flat_set :: proc(self: ^World, pos: int3) {

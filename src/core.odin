@@ -70,12 +70,8 @@ buffer_write_mapped_memory :: proc(self: Buffer, data: []$T, offset: int = 0) {
 
     mapped_memory: rawptr = self.allocation_info.mapped_data
     
-    if offset > 0 {
-        dst := uintptr(mapped_memory) + uintptr(offset)
-        mem.copy_non_overlapping(rawptr(dst), raw_data(data[:]), len(data) * size_of(T))
-    } else {
-        mem.copy_non_overlapping(mapped_memory, raw_data(data[:]), len(data) * size_of(T))
-    }
+    dst := uintptr(mapped_memory) + uintptr(offset)
+    mem.copy_non_overlapping(rawptr(dst), raw_data(data[:]), len(data) * size_of(T))
 }
 
 buffer_get_device_address :: proc(self: Buffer) -> vk.DeviceAddress {

@@ -1,8 +1,8 @@
 [vk_binding(0, 0)]
-RWTexture2D<float4> output;
+WTexture2D<float4> output;
 
 [vk_binding(1, 0)]
-StructuredBuffer<uint8_t> voxel_data;
+Texture3D<uint8_t> voxel_image;
 
 static const uint CHUNK_SIZE = 32;
 static const float FLT_MAX = 3.402823466e+38F;
@@ -19,12 +19,11 @@ struct Push_Constants {
 [vk_push_constant]
 Push_Constants p;
 
-uint8_t at(int3 pos) {
-    uint di = p.world_size * CHUNK_SIZE;
-    return voxel_data[pos.x + pos.y * di + pos.z * di * di];
+uint8_t at(uint3 pos) {
+    return voxel_image.Load(int4(pos, 0));
 }
 
-bool is_solid(int3 pos) {
+bool is_solid(uint3 pos) {
     return at(pos) > 0;
 }
 
@@ -80,6 +79,10 @@ Ray_Traversal_Result traverse(float3 origin, float3 direction) {
     var current_index = uint3(clamp(floor(origin), float3(0.0), float3(grid_max-1)));
     var t_max = (float3(current_index) + 0.5 * (1.0 + sgn_dir) - origin) * inv_dir;
     
+    /* Not centering t_max with + 0.5 * (1.0 + sgn_dir) is responsible for quadrant artifacts
+    t_max = (float3(current_index) - origin) * inv_dir;
+    */
+
     var step = uint3(int3(sgn_dir));
     var t_delta = abs(inv_dir);
     
@@ -153,8 +156,8 @@ void main(
             brightness = 1.0;
         }
 
-        output[texel] = float4(p.color.xyz * brightness, 1.0);
+        output.Store(texel, float4(p.color.xyz * brightness, 1.0));
     } else {
-        output[texel] = float4(ray_colour * 0.2, 1.0);
+        output.Store(texel, float4(ray_colour * 0.2, 1.0));
     }
 }
