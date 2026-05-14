@@ -5,7 +5,7 @@ import "core:math"
 
 World :: struct {
     chunks: []Chunk,
-    flat_voxels: []Voxel,
+    packed_voxels: []u128,
     size: int,
     updates: map[int3]u8,
     flat_dirty: bool,
@@ -14,14 +14,17 @@ World :: struct {
 create_world :: proc(size: int) -> (self: World) {
     self.size = size
     self.chunks = make([]Chunk, size * size * size)
-    self.flat_voxels = make([]Voxel, size * size * size * CHUNK_FLAT_SIZE)
+
+    di := size * CHUNK_SIZE
+    self.packed_voxels = make([]u128, (di * di * di) / 128)
+    
     self.updates = make(map[int3]u8)
     return
 }
 
 destroy_world :: proc(self: ^World) {
     delete(self.chunks)
-    delete(self.flat_voxels)
+    delete(self.packed_voxels)
     delete(self.updates)
 }
 
@@ -100,15 +103,24 @@ zorder_curve :: proc(pos: int3, size: int) -> int {
     return int(morton_encode(p))
 }
 
+get_packed_index :: proc(pos: int3, size: int) -> (index: int, bit: u32) {
+    di := size * CHUNK_SIZE
+    index = (pos.x + ((pos.y + (pos.z / 8) * di) / 4) * di) / 4
+    bit = u32((pos.x % 4) * 32 + (pos.y % 4) + (pos.z % 8) * 4)
+    return index, bit
+}
+
 world_flat_set :: proc(self: ^World, pos: int3) {
     di := self.size * CHUNK_SIZE
-    self.flat_voxels[pos.x + pos.y * di + pos.z * di * di] = 1
+    index, bit := get_packed_index(pos, self.size)
+    self.packed_voxels[index] |= 1 << bit
     self.flat_dirty = true
 }
 
 world_flat_unset :: proc(self: ^World, pos: int3) {
     di := self.size * CHUNK_SIZE
-    self.flat_voxels[pos.x + pos.y * di + pos.z * di * di] = 0
+    index, bit := get_packed_index(pos, self.size)
+    self.packed_voxels[index] &~= 1 << bit
     self.flat_dirty = true
 }
 

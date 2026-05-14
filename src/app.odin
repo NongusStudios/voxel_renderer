@@ -4,8 +4,8 @@ import "core:log"
 import sdl "vendor:sdl3"
 import vk  "vendor:vulkan"
 
-WIDTH  :: 1600
-HEIGHT :: 900
+WIDTH  :: 1920
+HEIGHT :: 1080
 TITLE  : cstring : "voxel_renderer"
 WINDOW_FLAGS : sdl.WindowFlags : {}
 

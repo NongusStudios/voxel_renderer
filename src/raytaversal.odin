@@ -24,7 +24,7 @@ ray_init_voxel_objects :: proc(self: ^Voxel_State) -> (ok: bool) {
     ) or_return
 
     di := u32(self.world.size * CHUNK_SIZE)
-    builder := init_image_builder(.R8_UINT, di, di, di)
+    builder := init_image_builder(.R32G32B32A32_UINT, di / 4, di / 4, di / 8)
     image_builder_set_usage(&builder, {.TRANSFER_DST, .SAMPLED})
     image_builder_set_type(&builder, .D3, .D3)
     self.ray.voxel_image = image_builder_build(&builder, allocation_info(.Gpu_Only)) or_return
@@ -120,7 +120,7 @@ ray_upload_voxels :: proc(self: ^Voxel_State, cmd: vk.CommandBuffer, barrier: ^P
         return
     }
     self.world.flat_dirty = false
-    buffer_write_mapped_memory(self.ray.voxel_staging_buffer, self.world.flat_voxels)
+    buffer_write_mapped_memory(self.ray.voxel_staging_buffer, self.world.packed_voxels)
 
     pipeline_barrier_add_image_barrier(barrier,
         {.ALL_COMMANDS}, {},

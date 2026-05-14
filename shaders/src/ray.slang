@@ -2,7 +2,7 @@
 WTexture2D<float4> output;
 
 [vk_binding(1, 0)]
-Texture3D<uint8_t> voxel_image;
+Texture3D<uint4> voxel_image;
 
 static const uint CHUNK_SIZE = 32;
 static const float FLT_MAX = 3.402823466e+38F;
@@ -19,12 +19,13 @@ struct Push_Constants {
 [vk_push_constant]
 Push_Constants p;
 
-uint8_t at(uint3 pos) {
-    return voxel_image.Load(int4(pos, 0));
-}
-
-bool is_solid(uint3 pos) {
-    return at(pos) > 0;
+bool is_solid(uint3 pos, inout int3 coord, inout uint4 block) {
+    var next_coord = int3(pos.x / 4, pos.y / 4, pos.z / 8);
+    if (any(next_coord != coord)) {
+        coord = next_coord;
+        block = voxel_image.Load(int4(coord, 0));
+    }
+    return bool(block[pos.x % 4] >> ((pos.y % 4) + (pos.z % 8) * 4) & 1);
 }
 
 struct Ray_Intersection_Result {
@@ -88,7 +89,10 @@ Ray_Traversal_Result traverse(float3 origin, float3 direction) {
     
     var traversal_dir = int(-1);
 
-    if (!is_solid(current_index)) // Don't traverse if instant hit
+    uint4 block;
+    var   coord = int3(-1);
+
+    if (!is_solid(current_index, coord, block)) // Don't traverse if instant hit
     while (true) {
         if (t_max.x < t_max.y && t_max.x < t_max.z) { // X traversal
             current_index.x += step.x;
@@ -106,7 +110,7 @@ Ray_Traversal_Result traverse(float3 origin, float3 direction) {
         
         if (any(current_index >= grid_max)) return result; 
 
-        if (is_solid(current_index)) {
+        if (is_solid(current_index, coord, block)) {
             break;
         }
     }
@@ -156,7 +160,7 @@ void main(
             brightness = 1.0;
         }
 
-        output.Store(texel, float4(p.color.xyz * brightness, 1.0));
+        output.Store(texel, float4(ray_colour * brightness, 1.0));
     } else {
         output.Store(texel, float4(ray_colour * 0.2, 1.0));
     }
