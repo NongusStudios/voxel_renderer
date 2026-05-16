@@ -76,7 +76,7 @@ Ray_Traversal_Result traverse(float3 origin, float3 direction) {
     if (!intersect.hit) return result;
 
     // Ensure origin is inside the grid
-    origin += direction * intersect.t_min;
+    origin = origin + direction * intersect.t_min;
     var current_index = uint3(clamp(floor(origin), float3(0.0), float3(grid_max-1)));
     var t_max = (float3(current_index) + 0.5 * (1.0 + sgn_dir) - origin) * inv_dir;
     

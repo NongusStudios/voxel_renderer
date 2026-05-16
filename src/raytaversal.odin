@@ -64,6 +64,7 @@ ray_init_descriptors :: proc(self: ^Voxel_State) -> (ok: bool) {
     writer := create_descriptor_writer()
     defer destroy_descriptor_writer(&writer)
 
+    descriptor_writer_target_set(&writer, self.ray.descriptor_set)
     descriptor_writer_add_single_image_write(&writer, .STORAGE_IMAGE, vk.DescriptorImageInfo {
         imageLayout = .GENERAL,
         imageView   = self.color_attachment.view,
@@ -74,7 +75,7 @@ ray_init_descriptors :: proc(self: ^Voxel_State) -> (ok: bool) {
         imageView   = self.ray.voxel_image.view,
     })
 
-    descriptor_writer_write_set(&writer, self.ray.descriptor_set)
+    descriptor_writer_write(&writer)
 
     track_resources(
         self.ray.descriptor_group,

@@ -51,7 +51,7 @@ create_staging_buffer :: proc(size: vk.DeviceSize) -> (staging_buffer: Buffer, o
         size,
         { .TRANSFER_SRC }, 
         allocation_info(.Cpu_Only, { .HOST_VISIBLE, .HOST_COHERENT }, {.Mapped})
-    ) or_return
+    ) or_return 
 
     return staging_buffer, true
 }
@@ -67,6 +67,8 @@ destroy_buffer :: proc(self: Buffer) {
 */
 buffer_write_mapped_memory :: proc(self: Buffer, data: []$T, offset: int = 0) {
     assert(self.size >= vk.DeviceSize(len(data) * size_of(T) + offset))
+
+    state := get_vk_state()
 
     mapped_memory: rawptr = self.allocation_info.mapped_data
     
@@ -328,9 +330,8 @@ descriptor_group_allocate_sets :: proc(self: ^Descriptor_Group) -> (ok: bool) {
 
 // Resets and reallocates sets in the group
 descriptor_group_reset :: proc(self: ^Descriptor_Group) -> (ok: bool) {
-    vk.ResetDescriptorPool(get_device(), self.pool, {})
-    descriptor_group_allocate_sets(self)
-    return true
+    vk_check(vk.ResetDescriptorPool(get_device(), self.pool, {})) or_return
+    return descriptor_group_allocate_sets(self)
 }
 
 MAX_DESCRIPTOR_LAYOUT_BINDINGS :: 16
@@ -392,12 +393,11 @@ descriptor_group_builder_add_binding :: proc(self: ^Descriptor_Group_Builder,
     self.pool_sizes[type] += count
 }
 
-// Builds the descriptor groups layouts, pool, and allocates sets
 descriptor_group_builder_build :: proc(self: ^Descriptor_Group_Builder, pool_flags: vk.DescriptorPoolCreateFlags = {}) -> (group: Descriptor_Group, ok: bool) {
     group = Descriptor_Group {
         sets = make([]vk.DescriptorSet, self.max_sets),
         layouts = make([]vk.DescriptorSetLayout, self.max_sets),
-    }
+    } 
 
     for &layout_info, i in self.layout_bindings {
         create_info := vk.DescriptorSetLayoutCreateInfo {
@@ -471,13 +471,21 @@ Descriptor_Write :: union {
     Descriptor_Write_Buffers,
 }
 
+Descriptor_Write_Set :: struct {
+    write: Descriptor_Write,
+    dst_set: vk.DescriptorSet,
+    dst_binding: u32,
+}
+
 Descriptor_Writer :: struct {
-    writes: [dynamic]Descriptor_Write,
+    writes: [dynamic]Descriptor_Write_Set,
+    current_set: vk.DescriptorSet,
+    current_binding: u32,
 }
 
 create_descriptor_writer :: proc() -> Descriptor_Writer {
     return {
-        writes = make([dynamic]Descriptor_Write),
+        writes = make([dynamic]Descriptor_Write_Set),
     }
 }
 
@@ -488,28 +496,46 @@ destroy_descriptor_writer :: proc(self: ^Descriptor_Writer) {
 
 descriptor_writer_reset :: proc(self: ^Descriptor_Writer) {
     for &write in self.writes {
-        #partial switch w in write {
+        #partial switch &w in write.write {
         case Descriptor_Write_Images: delete(w.images)
         case Descriptor_Write_Buffers: delete(w.buffers)
         }
     }
     clear(&self.writes)
+    self.current_set = 0
+    self.current_binding = 0
+}
+
+descriptor_writer_target_set :: proc(self: ^Descriptor_Writer, set: vk.DescriptorSet) {
+    self.current_set = set
+    self.current_binding = 0
+}
+
+descriptor_writer_make_write_info :: proc(self: ^Descriptor_Writer, write: Descriptor_Write) -> Descriptor_Write_Set {
+    dst := self.current_binding
+    self.current_binding += 1
+    
+    return Descriptor_Write_Set {
+        dst_set = self.current_set,
+        dst_binding = dst,
+        write = write,
+    }
 }
 
 // Add a multi image write that can be written to with append_write_info
 descriptor_writer_add_images_write :: proc(self: ^Descriptor_Writer, type: vk.DescriptorType) {
-    append(&self.writes, Descriptor_Write_Images {
+    append(&self.writes, descriptor_writer_make_write_info(self, Descriptor_Write_Images {
         type = type,
         images = make([dynamic]vk.DescriptorImageInfo),
-    })
+    }))
 }
 
 // Add a multi buffer write that can be written to with append_write_info
 descriptor_writer_add_buffers_write :: proc(self: ^Descriptor_Writer, type: vk.DescriptorType) {
-    append(&self.writes, Descriptor_Write_Buffers {
+    append(&self.writes, descriptor_writer_make_write_info(self, Descriptor_Write_Buffers {
         type = type,
-        buffers = make([dynamic]vk.DescriptorBufferInfo),
-    })
+        buffers = make([dynamic]vk.DescriptorBufferInfo)
+    }))
 }
 
 descriptor_writer_append_write_info :: proc{
@@ -522,7 +548,7 @@ descriptor_writer_append_image_write_info :: proc(self: ^Descriptor_Writer, imag
     current := len(self.writes)-1
 
     assert(current >= 0, "No active write - call add_images_write first")
-    write, ok := self.writes[current].(Descriptor_Write_Images)
+    write, ok := &self.writes[current].write.(Descriptor_Write_Images)
     assert(ok, "Active write is not the correct type - call add_images_write first")
 
     append(&write.images, image)
@@ -533,37 +559,37 @@ descriptor_writer_append_buffer_write_info :: proc(self: ^Descriptor_Writer, buf
     current := len(self.writes)-1
 
     assert(current >= 0, "No active write - call add_buffers_write first")
-    write, ok := self.writes[current].(Descriptor_Write_Buffers)
+    write, ok := &self.writes[current].write.(Descriptor_Write_Buffers)
     assert(ok, "Active write is not the correct type - call add_buffers_write first")
     
     append(&write.buffers, buffer)
 }
 
 descriptor_writer_add_single_image_write :: proc(self: ^Descriptor_Writer, type: vk.DescriptorType, image: vk.DescriptorImageInfo) {
-    append(&self.writes, Descriptor_Write_Image_Single {
+    append(&self.writes, descriptor_writer_make_write_info(self, Descriptor_Write_Image_Single {
         type = type,
         image = image,
-    })
+    }))
 }
 
 descriptor_writer_add_single_buffer_write :: proc(self: ^Descriptor_Writer, type: vk.DescriptorType, buffer: vk.DescriptorBufferInfo) {
-    append(&self.writes, Descriptor_Write_Buffer_Single {
+    append(&self.writes, descriptor_writer_make_write_info(self, Descriptor_Write_Buffer_Single {
         type = type,
         buffer = buffer,
-    })
+    }))
 }
 
 // Applies queued writes to a set. dstBinding is in the order of writes
-descriptor_writer_write_set :: proc(self: ^Descriptor_Writer, set: vk.DescriptorSet, reset := true) {
+descriptor_writer_write :: proc(self: ^Descriptor_Writer, reset := true) {
     write_infos := make([]vk.WriteDescriptorSet, len(self.writes)); defer delete(write_infos)
 
-    for &write, binding in self.writes {
-        write_info := &write_infos[binding]
+    for &write, i in self.writes {
+        write_info := &write_infos[i]
         write_info.sType  = .WRITE_DESCRIPTOR_SET
-        write_info.dstSet = set
-        write_info.dstBinding = u32(binding)
+        write_info.dstSet = write.dst_set
+        write_info.dstBinding = write.dst_binding
 
-        switch &w in write {
+        switch &w in write.write {
         case Descriptor_Write_Image_Single:
             write_info.descriptorType = w.type
             write_info.descriptorCount = 1
@@ -783,7 +809,7 @@ pipeline_builder_default :: proc(self: ^Pipeline_Builder) {
         sType = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
         polygonMode = .FILL,
         cullMode    = vk.CullModeFlags_NONE,
-        frontFace   = .COUNTER_CLOCKWISE,
+        frontFace   = .CLOCKWISE,
         lineWidth   = 1.0,
     }
 
@@ -796,7 +822,6 @@ pipeline_builder_default :: proc(self: ^Pipeline_Builder) {
         sType = .PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
         depthTestEnable = false,
         depthWriteEnable = false,
-        depthBoundsTestEnable = false,
         depthCompareOp = .NEVER,
         front = {},
         back  = {},
@@ -893,7 +918,7 @@ pipeline_builder_set_multisampling :: proc(self: ^Pipeline_Builder,
 }
 
 pipeline_builder_enable_depth_test :: proc(self: ^Pipeline_Builder,
-    compare: vk.CompareOp = .GREATER_OR_EQUAL,
+    compare: vk.CompareOp = .LESS,
     write_enabled := b32(true),
 ) {
     self.depth_stencil.depthTestEnable = true
